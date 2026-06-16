@@ -8,6 +8,7 @@ from app.models.schemas import (
     EmailVerification,
     FailedCampaign,
     JVPartner,
+    QueuedDealMatch,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "EmailVerification",
     "FailedCampaign",
     "JVPartner",
+    "QueuedDealMatch",
 ]

@@ -17,6 +17,10 @@ class BuyerBase(BaseModel):
     buyer_tier: str = Field(default="C-List")
     status: str = Field(default="Active")
     notes: Optional[str] = None
+    price_min: Optional[float] = Field(None, ge=0)
+    price_max: Optional[float] = Field(None, ge=0)
+    pref_property_type: Optional[str] = None  # House, Land, or NULL (both)
+    pref_cities: Optional[list[str]] = None  # Preferred cities/areas
 
 
 class BuyerCreate(BuyerBase):
@@ -34,6 +38,10 @@ class BuyerUpdate(BaseModel):
     buyer_tier: Optional[str] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    price_min: Optional[float] = Field(None, ge=0)
+    price_max: Optional[float] = Field(None, ge=0)
+    pref_property_type: Optional[str] = None
+    pref_cities: Optional[list[str]] = None
 
 
 class BuyerResponse(BuyerBase):
@@ -60,6 +68,10 @@ class BuyerResponse(BuyerBase):
     portfolio_insights: Optional[dict] = None
     additional_emails: List[str] = []
     has_embedding: bool = False
+    price_min: Optional[float] = None
+    price_max: Optional[float] = None
+    pref_property_type: Optional[str] = None
+    pref_cities: Optional[list[str]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -156,6 +168,28 @@ class DealBase(BaseModel):
                 raise ValueError("zoning is required when property_type is 'Land'")
         return self
 
+    @model_validator(mode="after")
+    def validate_prices(self) -> "DealBase":
+        """Validate price hierarchy: contract < floor < asking.
+
+        Ensures the assignment fee (spread = asking - contract) is protected:
+        - floor_price must be above contract_price (so there's margin)
+        - floor_price must be below asking_price (so offers can beat the floor)
+        """
+        if self.floor_price is not None and self.asking_price is not None:
+            if self.floor_price >= self.asking_price:
+                raise ValueError(
+                    f"floor_price (${self.floor_price:,.2f}) must be less than "
+                    f"asking_price (${self.asking_price:,.2f})"
+                )
+        if self.floor_price is not None and self.contract_price is not None:
+            if self.floor_price <= self.contract_price:
+                raise ValueError(
+                    f"floor_price (${self.floor_price:,.2f}) must be greater than "
+                    f"contract_price (${self.contract_price:,.2f}) — the spread needs room"
+                )
+        return self
+
 
 class DealCreate(DealBase):
     """Schema for creating a new deal. Inherits all DealBase fields with validation."""
@@ -191,6 +225,29 @@ class DealUpdate(BaseModel):
     jv_partner_id: Optional[UUID] = None
     jv_split_percentage: Optional[float] = Field(None, ge=0, le=100)
 
+    @model_validator(mode="after")
+    def validate_prices(self) -> "DealUpdate":
+        """Validate price hierarchy when prices are being updated.
+
+        Only validates the fields that were actually provided.
+        floor < asking and floor > contract.
+        """
+        fp = self.floor_price
+        ap = self.asking_price
+        cp = self.contract_price
+
+        if fp is not None and ap is not None:
+            if fp >= ap:
+                raise ValueError(
+                    f"floor_price (${fp:,.2f}) must be less than asking_price (${ap:,.2f})"
+                )
+        if fp is not None and cp is not None:
+            if fp <= cp:
+                raise ValueError(
+                    f"floor_price (${fp:,.2f}) must be greater than contract_price (${cp:,.2f})"
+                )
+        return self
+
 
 class DealResponse(DealBase):
     """Schema for deal responses. Includes all DB-generated fields.
@@ -214,6 +271,31 @@ class DealResponse(DealBase):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Matching schemas
+# ---------------------------------------------------------------------------
+
+
+class BuyerMatchResult(BaseModel):
+    """A single buyer match result with similarity score."""
+
+    id: UUID
+    full_name: str
+    email: str
+    buy_box: str
+    affiliation: Optional[str] = None
+    buyer_tier: Optional[str] = None
+    similarity: float
+
+
+class MatchResponse(BaseModel):
+    """Response containing ranked buyer matches for a deal."""
+
+    deal_id: UUID
+    deal_address: str
+    matches: List[BuyerMatchResult]
 
 
 # ---------------------------------------------------------------------------

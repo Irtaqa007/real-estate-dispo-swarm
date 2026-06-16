@@ -33,6 +33,11 @@ class Buyer(Base):
     buy_box_embedding = Column(Vector(1024), nullable=True)
     buyer_tier = Column(Text, default="C-List")  # A-List, B-List, C-List
     status = Column(Text, default="Active")  # Active, Paused, Do Not Contact
+    # Structured fields extracted from buy_box for hard-filter matching
+    price_min = Column(Numeric(19, 2), nullable=True)
+    price_max = Column(Numeric(19, 2), nullable=True)
+    pref_property_type = Column(Text, nullable=True)  # House, Land, or NULL (both)
+    pref_cities = Column(ARRAY(Text), nullable=True)  # Preferred cities/areas
     response_rate = Column(Float, default=0)
     avg_response_time_hours = Column(Float, nullable=True)
     deals_viewed = Column(Integer, default=0)
@@ -239,6 +244,34 @@ class ActivityLog(Base):
 
     def __repr__(self) -> str:
         return f"<ActivityLog(id={self.id}, action={self.action})>"
+
+
+class QueuedDealMatch(Base):
+    """A deal-to-buyer match that was queued because the buyer was at their
+    max active deals cap. Released automatically by the scheduler when the
+    buyer's active deal count drops below the cap.
+
+    When a buyer's queued match is released, it should be re-validated
+    against the buyer's CURRENT buy_box and hard filters before use.
+    """
+
+    __tablename__ = "queued_deal_matches"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id", ondelete="CASCADE"), nullable=False, index=True)
+    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(Text, default="waiting", index=True)  # waiting, invalidated, released, expired
+    similarity_score = Column(Float, nullable=True)  # Snapshot of similarity at queue time
+    queued_at = Column(DateTime(timezone=True), server_default=func.now())
+    released_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    buyer = relationship("Buyer")
+    deal = relationship("Deal")
+
+    def __repr__(self) -> str:
+        return f"<QueuedDealMatch(id={self.id}, buyer={self.buyer_id}, deal={self.deal_id}, status={self.status})>"
 
 
 class FailedCampaign(Base):

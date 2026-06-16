@@ -31,6 +31,7 @@ from app.services.reply_processor import process_reply, extract_buybox_changes, 
 from app.services.title_coordinator import send_assignment_contract
 from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection, increment_pitch_count
 from app.services.buyer_merge import merge_buy_boxes
+from app.services.matching_service import find_top_matches_for_deal, invalidate_queued_matches_for_buyer
 from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
 from app.services.jv_rotator import check_jv_rotation
@@ -192,6 +193,24 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                         logger.info("Regenerated buy_box embedding for buyer %s", buyer_id)
                     except Exception as emb_err:
                         logger.warning("Failed to regenerate embedding for buyer %s: %s", buyer_id, emb_err, exc_info=True)
+
+                    # Re-parse structured fields from merged buy_box
+                    try:
+                        from app.services.parse_buy_box import parse_buy_box
+                        parsed = await parse_buy_box(merged_buy_box)
+                        buyer_obj.price_min = parsed.get("price_min")
+                        buyer_obj.price_max = parsed.get("price_max")
+                        buyer_obj.pref_property_type = parsed.get("pref_property_type")
+                        buyer_obj.pref_cities = parsed.get("pref_cities")
+                    except Exception as parse_err:
+                        logger.warning("Failed to re-parse buy_box for buyer %s: %s", buyer_id, parse_err, exc_info=True)
+
+                    # Invalidate queued matches since preferences changed
+                    try:
+                        await invalidate_queued_matches_for_buyer(db, buyer_id)
+                    except Exception as inv_err:
+                        logger.warning("Failed to invalidate queued matches for buyer %s: %s", buyer_id, inv_err, exc_info=True)
+
                     # Log old vs new buy_box to activity_log
                     try:
                         await audit.log_buyer_updated(
@@ -542,40 +561,14 @@ async def launch_campaign(
         jv_reliability_score = max(0, 100 - (jv_partner.title_issue_rate or 0) * 100)
     buyer_match_count = 0  # Will be set after matching
 
-    # 3. Run semantic matching (same logic as matching router)
-    clean_embedding = [float(x) for x in deal.deal_embedding]
-    embedding_str = str(clean_embedding)
-
-    # Enhanced SQL: fetch more fields for smart filtering + fatigue + eligibility
-    sql = text("""
-        SELECT
-            b.id,
-            b.full_name,
-            b.email,
-            b.buy_box,
-            b.buyer_tier,
-            b.engagement_score,
-            b.last_pitch_sent_at,
-            b.pitches_this_week,
-            GREATEST(0, 1 - (b.buy_box_embedding <=> :deal_embedding)) AS similarity
-        FROM buyers b
-        WHERE b.status = 'Active'
-          AND b.email_verified = TRUE
-          AND b.buy_box_embedding IS NOT NULL
-          AND b.unsubscribed_at IS NULL
-        ORDER BY b.buy_box_embedding <=> CAST(:deal_embedding AS vector)
-        LIMIT :limit
-    """)
-
-    rows = await db.execute(
-        sql,
-        {
-            "deal_embedding": embedding_str,
-            "limit": match_limit * 2,  # Fetch extra to account for filtering
-        },
+    # 3. Run semantic matching with hard filters + similarity threshold + max-2-active-deals
+    match_result = await find_top_matches_for_deal(
+        db=db,
+        deal=deal,
+        limit=match_limit,
     )
-    all_matched = rows.fetchall()
-    buyer_match_count = len(all_matched)
+    all_matched = match_result.matches
+    buyer_match_count = len(match_result.matches)
 
     # Calculate priority score
     deal.priority_score = (
@@ -592,46 +585,64 @@ async def launch_campaign(
             detail="No matched buyers found for this deal. Create buyers with buy_box embeddings first.",
         )
 
+    # Fetch full Buyer records for eligibility/fatigue checks (BuyerMatchResult
+    # only has basic fields, not engagement_score/pitches_this_week)
+    matched_buyer_ids = [m.id for m in all_matched]
+    buyer_records = await db.execute(
+        select(Buyer).where(Buyer.id.in_(matched_buyer_ids))
+    )
+    buyer_map = {b.id: b for b in buyer_records.scalars().all()}
+
+    # Build list of (match_result, buyer_object) tuples
+    matched_pairs = []
+    for m in all_matched:
+        b = buyer_map.get(m.id)
+        if b:
+            matched_pairs.append((m, b))
+
+    if not matched_pairs:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No matched buyers with full records found.",
+        )
+
     # Apply Smart Buyer Filtering (feature 1): engagement, recency, C-List rules
-    eligible_buyers = []
+    eligible_pairs = []
     skipped_buyers = []
-    for row in all_matched:
+    for match, buyer in matched_pairs:
         allowed, reason = await assess_buyer_eligibility(
-            row, deal.created_at, days_since_upload,
+            buyer, deal.created_at, days_since_upload,
         )
         if allowed:
-            eligible_buyers.append(row)
+            eligible_pairs.append((match, buyer))
         else:
-            skipped_buyers.append((row, reason))
+            skipped_buyers.append((match, reason))
 
     if skipped_buyers:
         logger.info(
             "Smart filtering skipped %d buyers: %s",
             len(skipped_buyers),
-            "; ".join(f"{r[0].email}: {r[1]}" for r in skipped_buyers[:5]),
+            "; ".join(f"{m.email}: {r}" for m, r in skipped_buyers[:5]),
         )
 
     # Apply Buyer Fatigue Protection (feature 8)
     fatigue_skipped = []
-    final_buyers = []
-    for row in eligible_buyers:
-        allowed, reason = await check_fatigue_protection(
-            # Create a minimal Buyer-like object for the check
-            row
-        )
+    final_pairs = []
+    for match, buyer in eligible_pairs:
+        allowed, reason = await check_fatigue_protection(buyer)
         if allowed:
-            final_buyers.append(row)
+            final_pairs.append((match, buyer))
         else:
-            fatigue_skipped.append((row, reason))
+            fatigue_skipped.append((match, reason))
 
     if fatigue_skipped:
         logger.info(
             "Fatigue protection skipped %d buyers: %s",
             len(fatigue_skipped),
-            "; ".join(f"{r[0].email}: {r[1]}" for r in fatigue_skipped[:5]),
+            "; ".join(f"{m.email}: {r}" for m, r in fatigue_skipped[:5]),
         )
 
-    if not final_buyers:
+    if not final_pairs:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"All {len(all_matched)} matched buyers filtered out by eligibility or fatigue rules. Deal may need older buyers or manual override.",
@@ -639,31 +650,26 @@ async def launch_campaign(
 
     # Sort by tier for Staggered Campaign Launch (feature 7): A-List first
     tier_order = {"A-List": 0, "B-List": 1, "C-List": 2}
-    final_buyers.sort(key=lambda r: tier_order.get(getattr(r, 'buyer_tier', 'C-List') or 'C-List', 2))
+    final_pairs.sort(key=lambda p: tier_order.get(p[0].buyer_tier or 'C-List', 2))
 
     logger.info(
         "Launching campaign for deal %s (%s) with %d buyers (%d eligible after filtering, %d after fatigue)",
-        deal_id, deal.address, len(final_buyers), len(eligible_buyers), len(final_buyers),
+        deal_id, deal.address, len(final_pairs), len(eligible_pairs), len(final_pairs),
     )
 
     # Count tiers for staggered launch
     tier_counts = {"A-List": 0, "B-List": 0, "C-List": 0}
-    for row in final_buyers:
-        tier = getattr(row, 'buyer_tier', 'C-List') or 'C-List'
+    for match, _ in final_pairs:
+        tier = match.buyer_tier or 'C-List'
         if tier in tier_counts:
             tier_counts[tier] += 1
-        else:
-            tier_counts[tier] = 1
 
     # 4. Generate campaigns for each buyer (staggered)
     launch_time = datetime.now(timezone.utc)
     all_results: List[CampaignLaunchResult] = []
     total_touches_created = 0
 
-    # Track which touch 1 campaigns need staggered scheduling
-    touch_1_delayed = []  # B-List and C-List buyers whose touch 1 should be delayed
-
-    for row in final_buyers:
+    for match, buyer in final_pairs:
         buyer_touches = []
         touch_records = []
 
@@ -673,10 +679,10 @@ async def launch_campaign(
             # Generate email via Groq (with unsubscribe footer)
             email_data = await generate_touch_email(
                 touch=touch_num,
-                buyer_name=row.full_name,
-                buyer_email=row.email,
-                buy_box=row.buy_box,
-                buyer_tier=row.buyer_tier,
+                buyer_name=match.full_name,
+                buyer_email=match.email,
+                buy_box=match.buy_box,
+                buyer_tier=match.buyer_tier,
                 address=deal.address,
                 city=deal.city or "",
                 state=deal.state or "",
@@ -688,7 +694,7 @@ async def launch_campaign(
                 beds=deal.beds,
                 baths=deal.baths,
                 sqft=deal.sqft,
-                buyer_id=row.id,
+                buyer_id=match.id,
             )
 
             # Calculate scheduled send time based on touch timing
@@ -698,7 +704,7 @@ async def launch_campaign(
             # - Day 0: A-List touch 1 sends immediately
             # - Day 1: B-List touch 1 gets scheduled for day 1
             # - Day 3: C-List touch 1 gets scheduled for day 3
-            buyer_tier = getattr(row, 'buyer_tier', 'C-List') or 'C-List'
+            buyer_tier = match.buyer_tier or 'C-List'
             if touch_num == 1:
                 if buyer_tier == "A-List":
                     touch_status = "Sent"  # Send immediately
@@ -724,7 +730,7 @@ async def launch_campaign(
             campaign_record = Campaign(
                 id=uuid.uuid4(),
                 deal_id=deal_id,
-                buyer_id=row.id,
+                buyer_id=match.id,
                 touch_number=touch_num,
                 status=touch_status,
                 subject=email_data.get("subject", ""),
@@ -736,19 +742,17 @@ async def launch_campaign(
             if touch_num == 1 and touch_status == "Sent":
                 try:
                     await send_email(
-                        to=row.email,
+                        to=match.email,
                         subject=email_data.get("subject", ""),
                         body=email_data.get("body", ""),
                         campaign_id=campaign_record.id.hex,
                     )
                     campaign_record.sent_at = datetime.now(timezone.utc)
 
-                    # Increment fatigue counter for this buyer
-                    buyer_obj = await db.get(Buyer, row.id)
-                    if buyer_obj:
-                        await increment_pitch_count(db, buyer_obj)
+                    # Increment fatigue counter for this buyer (already have full buyer object)
+                    await increment_pitch_count(db, buyer)
                 except Exception as e:
-                    logger.warning("Failed to auto-send touch 1 for buyer %s: %s", row.id, e, exc_info=True)
+                    logger.warning("Failed to auto-send touch 1 for buyer %s: %s", match.id, e, exc_info=True)
                     campaign_record.status = "Queued"
             touch_records.append(campaign_record)
             total_touches_created += 1
@@ -765,11 +769,11 @@ async def launch_campaign(
         db.add_all(touch_records)
 
         all_results.append(CampaignLaunchResult(
-            buyer_id=row.id,
-            buyer_name=row.full_name,
-            buyer_email=row.email,
-            buyer_tier=row.buyer_tier,
-            similarity_score=float(row.similarity),
+            buyer_id=match.id,
+            buyer_name=match.full_name,
+            buyer_email=match.email,
+            buyer_tier=match.buyer_tier,
+            similarity_score=float(match.similarity),
             touches=buyer_touches,
         ))
 
@@ -782,13 +786,13 @@ async def launch_campaign(
 
     logger.info(
         "Campaign launched for deal %s: %d buyers, %d total touches",
-        deal_id, len(final_buyers), total_touches_created,
+        deal_id, len(final_pairs), total_touches_created,
     )
 
     return CampaignLaunchResponse(
         deal_id=deal_id,
         deal_address=deal.address,
-        total_buyers=len(final_buyers),
+        total_buyers=len(final_pairs),
         total_campaigns_created=total_touches_created,
         results=all_results,
     )

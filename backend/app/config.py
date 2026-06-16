@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # Database — must be set via DATABASE_URL in .env or environment
     database_url: str
 
+    # Matching similarity threshold — minimum cosine similarity score for a
+    # buyer-deal match to be considered valid. Below this threshold, no match.
+    match_similarity_threshold: float = 0.65
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 

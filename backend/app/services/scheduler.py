@@ -32,6 +32,7 @@ from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
 from app.services.state_persistence import save_all_state
 from app.services.circuit_breaker import gmail_circuit_breaker, get_cb_queue
+from app.services.matching_service import process_queued_matches, invalidate_queued_matches_for_buyer
 from app.services.resilience import get_metrics, get_idempotency_store
 from app.services.groq_client import get_call_count_today, get_calls_today_date
 from app.services.buyer_merge import merge_buy_boxes
@@ -343,6 +344,30 @@ async def process_buyer_replies() -> int:
                                         "Scheduler: failed to regenerate embedding for buyer %s: %s",
                                         buyer_id, emb_err, exc_info=True,
                                     )
+
+                                # Re-parse structured fields from merged buy_box
+                                try:
+                                    from app.services.parse_buy_box import parse_buy_box
+                                    parsed = await parse_buy_box(merged_buy_box)
+                                    buyer_obj.price_min = parsed.get("price_min")
+                                    buyer_obj.price_max = parsed.get("price_max")
+                                    buyer_obj.pref_property_type = parsed.get("pref_property_type")
+                                    buyer_obj.pref_cities = parsed.get("pref_cities")
+                                except Exception as parse_err:
+                                    logger.warning(
+                                        "Scheduler: failed to re-parse buy_box for buyer %s: %s",
+                                        buyer_id, parse_err, exc_info=True,
+                                    )
+
+                                # Invalidate queued matches since preferences changed
+                                try:
+                                    await invalidate_queued_matches_for_buyer(db, buyer_id)
+                                except Exception as inv_err:
+                                    logger.warning(
+                                        "Scheduler: failed to invalidate queued matches for buyer %s: %s",
+                                        buyer_id, inv_err, exc_info=True,
+                                    )
+
                                 # Log to activity_log
                                 try:
                                     await audit.log_buyer_updated(
@@ -634,6 +659,18 @@ async def _scheduler_loop() -> None:
                     logger.info("Scheduler: processed %d buyer replies", processed)
             except Exception as e:
                 logger.error("Scheduler: reply processing failed: %s", e, exc_info=True)
+
+            if not _running:
+                break
+
+            # ---- Task 2b: Process queued deal matches ----
+            try:
+                async with _db.async_session_factory() as db:
+                    released = await process_queued_matches(db)
+                    if released > 0:
+                        logger.info("Scheduler: released %d queued deal matches", released)
+            except Exception as e:
+                logger.error("Scheduler: queued match processing failed: %s", e, exc_info=True)
 
             if not _running:
                 break

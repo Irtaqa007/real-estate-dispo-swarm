@@ -172,6 +172,36 @@ async def update_deal(
 
     # Update only the fields that were provided
     update_data = deal_in.model_dump(exclude_unset=True)
+
+    # Dedup check: if core address/type fields changed, check for duplicates
+    # excluding the current deal itself
+    if _dedup_relevant_fields_changed(update_data):
+        is_dup, dup_info = await check_deal_duplicate(
+            db=db,
+            address=update_data.get("address", deal.address),
+            city=update_data.get("city", deal.city),
+            state=update_data.get("state", deal.state),
+            property_type=update_data.get("property_type", deal.property_type),
+            condition_description=update_data.get("condition_description", deal.condition_description),
+            beds=update_data.get("beds", deal.beds),
+            baths=update_data.get("baths", deal.baths),
+            sqft=update_data.get("sqft", deal.sqft),
+            lot_size=update_data.get("lot_size", deal.lot_size),
+            zoning=update_data.get("zoning", deal.zoning),
+            deal_id_to_exclude=str(deal.id),
+        )
+        if is_dup and dup_info:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": f"This deal is {dup_info['similarity_score']*100:.0f}% similar to an existing deal at {dup_info['address']}.",
+                    "is_duplicate": True,
+                    "matched_deal_id": dup_info["matched_deal_id"],
+                    "matched_address": dup_info["address"],
+                    "similarity_score": dup_info["similarity_score"],
+                },
+            )
+
     for field, value in update_data.items():
         setattr(deal, field, value)
 
@@ -466,6 +496,22 @@ async def close_deal(
         buyer_updated=buyer_updated,
         jv_updated=jv_updated,
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+_DEDUP_RELEVANT_FIELDS = frozenset({
+    "address", "city", "state", "property_type", "condition_description",
+    "beds", "baths", "sqft", "lot_size", "zoning",
+})
+
+
+def _dedup_relevant_fields_changed(update_data: dict) -> bool:
+    """Check if the updated fields could affect dedup similarity."""
+    return bool(_DEDUP_RELEVANT_FIELDS & update_data.keys())
 
 
 # Fields that affect the deal embedding (semantic matching relies on these)

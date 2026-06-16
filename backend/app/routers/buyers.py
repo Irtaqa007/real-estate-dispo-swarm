@@ -18,7 +18,9 @@ from app.schemas import BuyerCreate, BuyerResponse, BuyerUpdate
 from app.services.buyer_merge import find_duplicate_buyer, merge_new_into_existing_buyer
 from app.services.email_verification import verify_email
 from app.services.embeddings import generate_embedding
+from app.services.matching_service import invalidate_queued_matches_for_buyer
 from app.services.opt_out import validate_token
+from app.services.parse_buy_box import parse_buy_box
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,23 @@ async def create_buyer(
                 log_action="buyer_merge_dedup",
             )
 
+        # Apply explicit structured fields from the create payload,
+        # or re-parse from the merged buy_box if none were provided
+        update_data = buyer_in.model_dump(exclude_unset=True)
+        explicit_fields = [f for f in ("price_min", "price_max", "pref_property_type", "pref_cities") if f in update_data]
+        if explicit_fields:
+            for field in explicit_fields:
+                setattr(existing_buyer, field, update_data[field])
+        else:
+            parsed = await parse_buy_box(existing_buyer.buy_box)
+            existing_buyer.price_min = parsed.get("price_min")
+            existing_buyer.price_max = parsed.get("price_max")
+            existing_buyer.pref_property_type = parsed.get("pref_property_type")
+            existing_buyer.pref_cities = parsed.get("pref_cities")
+
+        # Invalidate queued matches since buy_box changed
+        await invalidate_queued_matches_for_buyer(db, existing_buyer.id)
+
         await db.commit()
         # Explicitly load the buyer_emails relationship so additional_emails
         # property is populated in the response
@@ -81,6 +100,9 @@ async def create_buyer(
         )
         return existing_buyer
 
+    # Parse structured fields from buy_box
+    parsed = await parse_buy_box(buyer_in.buy_box)
+
     # No duplicate — create new buyer as normal
     buyer = Buyer(
         id=uuid.uuid4(),
@@ -91,6 +113,10 @@ async def create_buyer(
         buyer_tier=buyer_in.buyer_tier or "C-List",
         status=buyer_in.status or "Active",
         notes=buyer_in.notes,
+        price_min=buyer_in.price_min or parsed.get("price_min"),
+        price_max=buyer_in.price_max or parsed.get("price_max"),
+        pref_property_type=buyer_in.pref_property_type or parsed.get("pref_property_type"),
+        pref_cities=buyer_in.pref_cities or parsed.get("pref_cities"),
     )
 
     db.add(buyer)
@@ -156,8 +182,21 @@ async def update_buyer(
 
     # Update only the fields that were provided
     update_data = buyer_in.model_dump(exclude_unset=True)
+
+    # If buy_box changed (and no explicit structured fields given), re-parse
+    if "buy_box" in update_data and not any(f in update_data for f in ("price_min", "price_max", "pref_property_type", "pref_cities")):
+        parsed = await parse_buy_box(buyer_in.buy_box)
+        buyer.price_min = parsed.get("price_min")
+        buyer.price_max = parsed.get("price_max")
+        buyer.pref_property_type = parsed.get("pref_property_type")
+        buyer.pref_cities = parsed.get("pref_cities")
+
     for field, value in update_data.items():
         setattr(buyer, field, value)
+
+    # Invalidate queued matches if buy_box or structured fields changed
+    if any(f in update_data for f in ("buy_box", "price_min", "price_max", "pref_property_type", "pref_cities")):
+        await invalidate_queued_matches_for_buyer(db, buyer.id)
 
     await db.commit()
     await db.refresh(buyer)
@@ -179,6 +218,7 @@ async def _verify_email_background(buyer_id: uuid.UUID, email: str) -> None:
         from app.database import async_session_factory
 
         verification = await verify_email(email)
+        buy_box = None
         async with async_session_factory() as db:
             buyer = await db.get(Buyer, buyer_id)
             if buyer:
@@ -196,9 +236,13 @@ async def _verify_email_background(buyer_id: uuid.UUID, email: str) -> None:
                 await db.commit()
                 logger.info("Background email verification for %s: %s", email, verification["result"])
 
+                # Capture buy_box before the session closes — buyer becomes
+                # detached after the async with block exits
+                buy_box = buyer.buy_box
+
         # Auto-trigger embedding if verification passed and buyer has a buy box
-        if verification["result"] == "valid" and buyer and buyer.buy_box:
-            await _generate_buyer_embedding_background(buyer_id, buyer.buy_box)
+        if verification["result"] == "valid" and buy_box:
+            await _generate_buyer_embedding_background(buyer_id, buy_box)
             logger.info(
                 "Auto-triggered buy-box embedding for verified buyer %s (%s)",
                 buyer_id, email,
