@@ -1,0 +1,192 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --foreground: 255, 255, 255;
+    --background: 2, 6, 23;
+    --brand: 59, 130, 246;
+    --surface: 15, 23, 42;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(71, 85, 105, 0.5) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(71, 85, 105, 0.5);
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(71, 85, 105, 0.8);
+  }
+
+  ::selection {
+    background: rgba(59, 130, 246, 0.3);
+    color: #fff;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    color: rgb(var(--foreground));
+    background: rgb(var(--background));
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Custom focus ring */
+  *:focus-visible {
+    outline: 2px solid rgba(59, 130, 246, 0.5);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* Card variant with glass morphism */
+  .card-glass {
+    @apply rounded-xl border border-slate-800/50 bg-slate-900/50 backdrop-blur-sm;
+  }
+
+  .card-glass-hover {
+    @apply card-glass transition-all duration-300 hover:border-slate-700/50 hover:bg-slate-800/50 hover:shadow-lg hover:shadow-slate-900/50;
+  }
+
+  /* Input style */
+  .input-base {
+    @apply w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-800/50 text-sm text-white placeholder-slate-500 
+           focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 
+           transition-all duration-200;
+  }
+
+  /* Select wrapper */
+  .select-wrap {
+    @apply relative;
+  }
+
+  .select-wrap select {
+    @apply input-base appearance-none pr-8;
+  }
+
+  /* Button base */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium 
+           transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-primary {
+    @apply btn text-white bg-blue-600 hover:bg-blue-500 active:bg-blue-600 
+           shadow-lg shadow-blue-600/20 hover:shadow-blue-500/25;
+  }
+
+  .btn-secondary {
+    @apply btn text-slate-300 bg-slate-800 hover:bg-slate-700 hover:text-white;
+  }
+
+  .btn-success {
+    @apply btn text-white bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-600 
+           shadow-lg shadow-emerald-600/20 hover:shadow-emerald-500/25;
+  }
+
+  .btn-danger {
+    @apply btn text-white bg-red-600 hover:bg-red-500 active:bg-red-600 
+           shadow-lg shadow-red-600/20 hover:shadow-red-500/25;
+  }
+
+  /* Badge */
+  .badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  /* Shimmer loading effect */
+  .shimmer {
+    @apply relative overflow-hidden;
+  }
+
+  .shimmer::after {
+    content: "";
+    @apply absolute inset-0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.03),
+      transparent
+    );
+    animation: shimmer 2s linear infinite;
+  }
+
+  /* Stagger animation for lists */
+  .stagger-1 { animation-delay: 0ms; }
+  .stagger-2 { animation-delay: 50ms; }
+  .stagger-3 { animation-delay: 100ms; }
+  .stagger-4 { animation-delay: 150ms; }
+  .stagger-5 { animation-delay: 200ms; }
+  .stagger-6 { animation-delay: 250ms; }
+  .stagger-7 { animation-delay: 300ms; }
+  .stagger-8 { animation-delay: 350ms; }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Inline animation keyframes                                          */
+/* These are used by inline style={{ animation: 'fadeIn ...' }}         */
+/* Must be defined outside @layer so Tailwind JIT doesn't strip them   */
+/* ------------------------------------------------------------------ */
+@keyframes fadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes slideUp {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUpSm {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scaleIn {
+  0% { opacity: 0; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulseSlow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400;
+  }
+
+  .text-gradient-emerald {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-teal-400;
+  }
+
+  .glass {
+    @apply bg-slate-900/80 backdrop-blur-xl;
+  }
+}
