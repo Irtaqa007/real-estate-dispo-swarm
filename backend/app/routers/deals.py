@@ -22,6 +22,7 @@ from app.schemas import (
 from app.services.embeddings import generate_embedding
 from app.services.google_drive import upload_multiple
 from app.services.deal_dedup import check_deal_duplicate
+from app.services.zip_lookup import lookup_zip
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,22 @@ async def create_deal(
 
     logger.info("Deal %s created — embedding queued in background", deal.id)
     return deal
+
+
+@router.get("/zip-lookup/{zip_code}")
+async def zip_lookup(zip_code: str):
+    """Look up city, state, and county for a US ZIP code.
+
+    Uses the free Zippopotam.us API (no API key required).
+    Returns city, state, state_full, county.
+    """
+    result = await lookup_zip(zip_code)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Could not find location for ZIP code '{zip_code}'",
+        )
+    return result.to_dict()
 
 
 @router.get("", response_model=List[DealResponse])

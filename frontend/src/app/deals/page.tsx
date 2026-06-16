@@ -125,7 +125,6 @@ interface DealFormData {
   floor_price: string;
   contract_price: string;
   title_status: string;
-  photos: string;
   jv_partner_id: string;
   jv_split_percentage: string;
 }
@@ -153,7 +152,6 @@ const emptyForm: DealFormData = {
   floor_price: "",
   contract_price: "",
   title_status: "Clear",
-  photos: "",
   jv_partner_id: "",
   jv_split_percentage: "50",
 };
@@ -162,6 +160,26 @@ const PROPERTY_TYPES = ["House", "Land"];
 const TITLE_STATUSES = ["Clear", "Liens", "Probate", "Other"];
 const OCCUPANCY_STATUSES = ["", "Vacant", "Tenant", "Owner"];
 const DEAL_STATUSES = ["Available", "Under Contract", "Sold", "Dead", "Campaign Launched"];
+
+const ZONING_OPTIONS = [
+  "",
+  "Residential (Single-Family)",
+  "Residential (Multi-Family)",
+  "Commercial",
+  "Industrial",
+  "Agricultural",
+  "Mixed-Use",
+  "Office",
+  "Retail",
+  "Special Use",
+  "Planned Development",
+  "Open Space",
+  "Historic District",
+  "Floodplain",
+  "Recreational",
+  "Transportation / Utility",
+  "Other",
+];
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -423,6 +441,18 @@ function DealFormSection({
   );
 }
 
+async function lookupZip(zip: string): Promise<{ city: string; state: string; county: string } | null> {
+  if (!zip || zip.length < 5) return null;
+  try {
+    const res = await fetch(`/api/deals/zip-lookup/${zip}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { city: data.city || "", state: data.state || "", county: data.county || "" };
+  } catch {
+    return null;
+  }
+}
+
 function DealForm({
   data,
   onChange,
@@ -467,7 +497,26 @@ function DealForm({
           </div>
           <div>
             <label className={labelCls}>Zip</label>
-            <input className={inputCls} value={data.zip} onChange={field("zip")} placeholder="Zip" />
+            <input
+              className={inputCls}
+              value={data.zip}
+              onChange={field("zip")}
+              onBlur={async (e) => {
+                const zip = e.target.value.trim();
+                if (zip.length === 5 && /^\d{5}$/.test(zip) && !data.city && !data.state) {
+                  const location = await lookupZip(zip);
+                  if (location) {
+                    onChange({
+                      ...data,
+                      city: location.city || data.city,
+                      state: location.state || data.state,
+                      county: location.county || data.county,
+                    });
+                  }
+                }
+              }}
+              placeholder="Zip"
+            />
           </div>
         </div>
         <div>
@@ -568,7 +617,16 @@ function DealForm({
                 <label className={labelCls}>
                   Zoning <span className="text-red-400">*</span>
                 </label>
-                <input className={inputCls} value={data.zoning} onChange={field("zoning")} placeholder="e.g. Residential" />
+                <div className="relative">
+                  <select className={`${inputCls} appearance-none`} value={data.zoning} onChange={field("zoning")}>
+                    {ZONING_OPTIONS.map((z) => (
+                      <option key={z} value={z}>
+                        {z || "Select…"}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                </div>
                 {errors.zoning && <p className={errorCls}>{errors.zoning}</p>}
               </div>
             </div>
@@ -616,14 +674,8 @@ function DealForm({
             <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
         </div>
-        <div>
-          <label className={labelCls}>Photos (URLs)</label>
-          <input
-            className={inputCls}
-            value={data.photos}
-            onChange={field("photos")}
-            placeholder="Comma-separated URLs"
-          />
+        <div className="text-xs text-slate-500 italic">
+          Photos &amp; documents can be uploaded via the file upload section below after creating/saving the deal.
         </div>
       </DealFormSection>
 
@@ -667,10 +719,12 @@ function DealForm({
       <DealFormSection title="JV Partner" icon={<Users className="w-4 h-4 text-cyan-400" />}>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className={labelCls}>JV Partner</label>
+            <label className={labelCls}>
+              JV Partner <span className="text-red-400">*</span>
+            </label>
             <div className="relative">
               <select className={`${inputCls} appearance-none`} value={data.jv_partner_id} onChange={field("jv_partner_id")}>
-                <option value="">None</option>
+                <option value="">Select a JV partner…</option>
                 {jvPartners.map((jp) => (
                   <option key={jp.id} value={jp.id}>
                     {jp.name}
@@ -679,6 +733,7 @@ function DealForm({
               </select>
               <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
             </div>
+            {errors.jv_partner_id && <p className={errorCls}>{errors.jv_partner_id}</p>}
           </div>
           <div>
             <label className={labelCls}>Split %</label>
@@ -915,6 +970,7 @@ export default function DealsPage() {
     if (!data.asking_price.trim() || isNaN(Number(data.asking_price))) errs.asking_price = "Valid asking price is required";
     if (!data.floor_price.trim() || isNaN(Number(data.floor_price))) errs.floor_price = "Valid floor price is required";
     if (!data.contract_price.trim() || isNaN(Number(data.contract_price))) errs.contract_price = "Valid contract price is required";
+    if (!data.jv_partner_id.trim()) errs.jv_partner_id = "A JV partner must be selected";
 
     if (data.property_type === "House") {
       if (!data.beds.trim() || isNaN(Number(data.beds))) errs.beds = "Beds is required";
@@ -942,9 +998,6 @@ export default function DealsPage() {
       floor_price: Number(data.floor_price),
       contract_price: Number(data.contract_price),
       title_status: data.title_status,
-      photos: data.photos.trim()
-        ? data.photos.split(",").map((s) => s.trim()).filter(Boolean)
-        : null,
       jv_partner_id: data.jv_partner_id || null,
       jv_split_percentage: data.jv_split_percentage ? Number(data.jv_split_percentage) : 50,
     };
@@ -1148,7 +1201,6 @@ export default function DealsPage() {
       floor_price: d.floor_price.toString(),
       contract_price: d.contract_price.toString(),
       title_status: d.title_status,
-      photos: d.photos?.join(", ") || "",
       jv_partner_id: d.jv_partner_id || "",
       jv_split_percentage: d.jv_split_percentage?.toString() || "50",
     });

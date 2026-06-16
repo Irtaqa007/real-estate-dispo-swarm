@@ -58,6 +58,8 @@ class BuyerResponse(BuyerBase):
     pitches_this_week: Optional[int] = 0
     unsubscribed_at: Optional[datetime] = None
     portfolio_insights: Optional[dict] = None
+    additional_emails: List[str] = []
+    has_embedding: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -69,6 +71,8 @@ class JVPartnerBase(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255)
     email: str = Field(..., max_length=255)
+    phone: Optional[str] = None
+    source: Optional[str] = None
 
 
 class JVPartnerCreate(JVPartnerBase):
@@ -81,6 +85,8 @@ class JVPartnerUpdate(BaseModel):
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = None
+    source: Optional[str] = None
 
 
 class JVPartnerResponse(JVPartnerBase):
@@ -131,7 +137,7 @@ class DealBase(BaseModel):
     contract_price: float = Field(...)
     title_status: str = Field(...)
     photos: Optional[list[str]] = None
-    jv_partner_id: Optional[UUID] = None
+    jv_partner_id: UUID = Field(...)  # Required — every deal must have a JV partner
     jv_split_percentage: Optional[float] = Field(default=50, ge=0, le=100)
 
     @model_validator(mode="after")
@@ -187,11 +193,16 @@ class DealUpdate(BaseModel):
 
 
 class DealResponse(DealBase):
-    """Schema for deal responses. Includes all DB-generated fields."""
+    """Schema for deal responses. Includes all DB-generated fields.
+
+    Note: jv_partner_id is overridden as Optional to support existing deals
+    created before JV partner became required.
+    """
 
     id: UUID
     status: str = "Available"
     assigned_buyer_id: Optional[UUID] = None
+    jv_partner_id: Optional[UUID] = None
     spread: Optional[float] = None
     priority_score: Optional[float] = 0.0
     closed_at: Optional[datetime] = None

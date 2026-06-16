@@ -1,13 +1,14 @@
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi.exceptions import RequestValidationError, ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.middleware import (
     http_exception_handler,
+    response_validation_handler,
     unhandled_exception_handler,
     validation_exception_handler,
 )
@@ -128,6 +129,7 @@ app = FastAPI(
 # Exception handlers — consistent error serialization
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(ResponseValidationError, response_validation_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
 # CORS

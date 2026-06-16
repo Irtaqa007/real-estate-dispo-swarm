@@ -11,7 +11,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, JVPartner
+from app.models.schemas import ActivityLog, Buyer, BuyerEmail, Campaign, Deal, JVPartner
 from app.schemas import (
     CampaignLaunchResponse,
     CampaignLaunchResult,
@@ -30,6 +30,7 @@ from app.services.dead_letter_queue import move_to_dlq
 from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message
 from app.services.title_coordinator import send_assignment_contract
 from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection, increment_pitch_count
+from app.services.buyer_merge import merge_buy_boxes
 from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
 from app.services.jv_rotator import check_jv_rotation
@@ -75,12 +76,23 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
         CheckRepliesResponse with per-reply results.
     """
     # 1. Fetch all buyer email addresses from the database
+    # Include both primary emails and additional buyer_emails
     buyer_result = await db.execute(
         select(Buyer.id, Buyer.email).where(Buyer.email.isnot(None))
     )
     all_buyers = buyer_result.all()
     buyer_emails = [b.email for b in all_buyers]
     buyer_map = {b.email.lower(): b.id for b in all_buyers}
+
+    # Also index additional emails from buyer_emails table
+    be_result = await db.execute(
+        select(BuyerEmail.buyer_id, BuyerEmail.email)
+    )
+    for row in be_result.all():
+        email_lower = row.email.lower()
+        if email_lower not in buyer_map:
+            buyer_map[email_lower] = row.buyer_id
+            buyer_emails.append(row.email)
 
     if not buyer_emails:
         return CheckRepliesResponse(
@@ -161,7 +173,11 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                     old_buy_box=old_buy_box,
                 )
                 if buybox_result.get("criteria_changed") and buybox_result.get("new_criteria"):
-                    buyer_obj.buy_box = buybox_result["new_criteria"]
+                    # Smart merge: never remove old criteria, intelligently combine
+                    merged_buy_box = await merge_buy_boxes(
+                        old_buy_box, buybox_result["new_criteria"]
+                    )
+                    buyer_obj.buy_box = merged_buy_box
                     campaign.buyer_profile_updated = True
                     buybox_updated_flag = True
                     db.add(campaign)
@@ -169,7 +185,7 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                     try:
                         from app.services.embeddings import generate_embedding
                         new_embedding = await generate_embedding(
-                            buybox_result["new_criteria"],
+                            merged_buy_box,
                             input_type="search_query",
                         )
                         buyer_obj.buy_box_embedding = new_embedding
@@ -181,7 +197,7 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                         await audit.log_buyer_updated(
                             db, buyer_id,
                             changes={
-                                "buy_box": {"old": old_buy_box[:200], "new": buybox_result["new_criteria"][:200]},
+                                "buy_box": {"old": old_buy_box[:200], "new": merged_buy_box[:200]},
                                 "changes_summary": buybox_result.get("changes_summary", ""),
                             },
                             updated_by="ai_classification",

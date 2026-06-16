@@ -34,6 +34,8 @@ from app.services.state_persistence import save_all_state
 from app.services.circuit_breaker import gmail_circuit_breaker, get_cb_queue
 from app.services.resilience import get_metrics, get_idempotency_store
 from app.services.groq_client import get_call_count_today, get_calls_today_date
+from app.services.buyer_merge import merge_buy_boxes
+from app.models.schemas import BuyerEmail
 
 logger = logging.getLogger(__name__)
 
@@ -233,13 +235,23 @@ async def process_buyer_replies() -> int:
     """
     async with _db.async_session_factory() as db:
         try:
-            # 1. Fetch all buyer email addresses
+            # 1. Fetch all buyer email addresses (primary + additional)
             buyer_result = await db.execute(
                 select(Buyer.id, Buyer.email).where(Buyer.email.isnot(None))
             )
             all_buyers = buyer_result.all()
             buyer_emails = [b.email for b in all_buyers]
             buyer_map = {b.email.lower(): b.id for b in all_buyers}
+
+            # Also index additional emails from buyer_emails table
+            be_result = await db.execute(
+                select(BuyerEmail.buyer_id, BuyerEmail.email)
+            )
+            for row in be_result.all():
+                email_lower = row.email.lower()
+                if email_lower not in buyer_map:
+                    buyer_map[email_lower] = row.buyer_id
+                    buyer_emails.append(row.email)
 
             if not buyer_emails:
                 return 0
@@ -308,13 +320,17 @@ async def process_buyer_replies() -> int:
                                 old_buy_box=old_buy_box,
                             )
                             if buybox_result.get("criteria_changed") and buybox_result.get("new_criteria"):
-                                buyer_obj.buy_box = buybox_result["new_criteria"]
+                                # Smart merge: never remove old criteria, intelligently combine
+                                merged_buy_box = await merge_buy_boxes(
+                                    old_buy_box, buybox_result["new_criteria"]
+                                )
+                                buyer_obj.buy_box = merged_buy_box
                                 campaign.buyer_profile_updated = True
                                 db.add(campaign)
                                 # Regenerate embedding (already imported at module level)
                                 try:
                                     new_embedding = await generate_embedding(
-                                        buybox_result["new_criteria"],
+                                        merged_buy_box,
                                         input_type="search_query",
                                     )
                                     buyer_obj.buy_box_embedding = new_embedding
@@ -335,7 +351,7 @@ async def process_buyer_replies() -> int:
                                         changes={
                                             "buy_box": {
                                                 "old": old_buy_box[:200],
-                                                "new": buybox_result["new_criteria"][:200],
+                                                "new": merged_buy_box[:200],
                                             },
                                             "changes_summary": buybox_result.get("changes_summary", ""),
                                         },

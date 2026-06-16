@@ -58,9 +58,46 @@ class Buyer(Base):
     campaigns = relationship("Campaign", back_populates="buyer")
     email_verifications = relationship("EmailVerification", back_populates="buyer")
     deals = relationship("Deal", back_populates="assigned_buyer", foreign_keys="Deal.assigned_buyer_id")
+    buyer_emails = relationship("BuyerEmail", back_populates="buyer", cascade="all, delete-orphan")
+
+    @property
+    def additional_emails(self) -> list:
+        """Return list of additional email addresses (excluding primary)."""
+        if not self.buyer_emails:
+            return []
+        return [be.email for be in self.buyer_emails]
+
+    @property
+    def has_embedding(self) -> bool:
+        """Whether this buyer has a buy_box_embedding (i.e. is matchable)."""
+        return self.buy_box_embedding is not None
 
     def __repr__(self) -> str:
         return f"<Buyer(id={self.id}, email={self.email})>"
+
+
+class BuyerEmail(Base):
+    """Additional email addresses for a buyer.
+
+    A buyer can have multiple active emails. The primary email is stored
+    in the buyers.email column; additional emails are stored here.
+    """
+
+    __tablename__ = "buyer_emails"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id", ondelete="CASCADE"), nullable=False, index=True)
+    email = Column(Text, nullable=False, index=True)
+    email_verified = Column(Boolean, default=False)
+    email_verification_status = Column(Text, nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    buyer = relationship("Buyer", back_populates="buyer_emails")
+
+    def __repr__(self) -> str:
+        return f"<BuyerEmail(id={self.id}, email={self.email}, buyer_id={self.buyer_id})>"
 
 
 class JVPartner(Base):
@@ -69,6 +106,8 @@ class JVPartner(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(Text, nullable=False)
     email = Column(Text, nullable=False)
+    phone = Column(Text, nullable=True)
+    source = Column(Text, nullable=True)
     deals_linked = Column(ARRAY(UUID(as_uuid=True)), default=list)
     total_deals_submitted = Column(Integer, default=0)
     total_deals_closed = Column(Integer, default=0)

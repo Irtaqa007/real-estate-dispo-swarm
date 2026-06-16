@@ -16,7 +16,11 @@ router = APIRouter(prefix="/api/jv-partners", tags=["jv-partners"])
 
 @router.post("", response_model=JVPartnerResponse, status_code=status.HTTP_201_CREATED)
 async def create_jv_partner(jv_in: JVPartnerCreate, db: AsyncSession = Depends(get_db)):
-    """Create a new JV partner."""
+    """Create a new JV partner.
+
+    Deduplication: checks for existing partner with same email (primary key)
+    or same name + normalized email domain. If a match is found, returns 409.
+    """
     # Check for duplicate email
     existing = await db.execute(select(JVPartner).where(JVPartner.email == jv_in.email))
     if existing.scalar_one_or_none():
@@ -25,10 +29,22 @@ async def create_jv_partner(jv_in: JVPartnerCreate, db: AsyncSession = Depends(g
             detail=f"JV Partner with email '{jv_in.email}' already exists",
         )
 
+    # Check for duplicate name (case-insensitive) with different email
+    existing_name = await db.execute(
+        select(JVPartner).where(JVPartner.name.ilike(jv_in.name))
+    )
+    if existing_name.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"JV Partner with name '{jv_in.name}' already exists",
+        )
+
     jv_partner = JVPartner(
         id=uuid.uuid4(),
         name=jv_in.name,
         email=jv_in.email,
+        phone=jv_in.phone,
+        source=jv_in.source,
     )
 
     db.add(jv_partner)

@@ -31,6 +31,8 @@ interface JVPartner {
   id: string;
   name: string;
   email: string;
+  phone: string | null;
+  source: string | null;
   deals_linked: string[];
   total_deals_submitted: number;
   total_deals_closed: number;
@@ -45,11 +47,15 @@ interface JVPartner {
 interface JVFormData {
   name: string;
   email: string;
+  phone: string;
+  source: string;
 }
 
 const emptyForm: JVFormData = {
   name: "",
   email: "",
+  phone: "",
+  source: "",
 };
 
 // ---------------------------------------------------------------------------
@@ -213,6 +219,14 @@ function JVForm({
         <input className={inputCls} value={data.email} onChange={field("email")} placeholder="e.g. john@example.com" type="email" />
         {errors.email && <p className={errorCls}>{errors.email}</p>}
       </div>
+      <div>
+        <label className={labelCls}>Phone</label>
+        <input className={inputCls} value={data.phone} onChange={field("phone")} placeholder="e.g. (555) 123-4567" type="tel" />
+      </div>
+      <div>
+        <label className={labelCls}>Source</label>
+        <input className={inputCls} value={data.source} onChange={field("source")} placeholder="e.g. Referral, Website, Cold Call" />
+      </div>
     </div>
   );
 }
@@ -244,6 +258,8 @@ function DetailModal({
       <div className="divide-y divide-slate-700/30">
         <Row label="Name" value={partner.name} />
         <Row label="Email" value={partner.email} />
+        <Row label="Phone" value={partner.phone || "—"} />
+        <Row label="Source" value={partner.source || "—"} />
         <Row label="Deals Submitted" value={partner.total_deals_submitted} />
         <Row label="Deals Closed" value={partner.total_deals_closed} />
         <Row
@@ -454,7 +470,7 @@ export default function JVPartnersPage() {
 
   function openEdit(p: JVPartner) {
     setEditTarget(p);
-    setForm({ name: p.name, email: p.email });
+    setForm({ name: p.name, email: p.email, phone: p.phone || "", source: p.source || "" });
     setFormErrors({});
   }
 

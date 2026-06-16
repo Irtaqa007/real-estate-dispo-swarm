@@ -34,6 +34,7 @@ interface Buyer {
   notes: string | null;
   email_verified: boolean;
   email_verification_status: string | null;
+  has_embedding: boolean;
   engagement_score: number;
   created_at: string;
   updated_at: string;
@@ -392,10 +393,27 @@ function ViewModal({
           value={
             buyer.email_verified ? (
               <span className="text-emerald-400 inline-flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Yes
+                <CheckCircle2 className="w-3.5 h-3.5" /> {buyer.email_verification_status || "Yes"}
               </span>
             ) : (
-              <span className="text-slate-400">No</span>
+              <span className="text-slate-400 inline-flex items-center gap-1">
+                {getVerificationIcon(buyer.email_verification_status)}
+                {buyer.email_verification_status || "Pending"}
+              </span>
+            )
+          }
+        />
+        <Row
+          label="Matchable"
+          value={
+            buyer.has_embedding ? (
+              <span className="text-emerald-400 inline-flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Yes (embedded)
+              </span>
+            ) : (
+              <span className="text-amber-400 inline-flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5" /> {buyer.email_verified ? "Pending embed" : "Needs verification first"}
+              </span>
             )
           }
         />
@@ -420,6 +438,7 @@ export default function BuyersPage() {
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [verificationFilter, setVerificationFilter] = useState("");
 
   // Pagination
   const [page, setPage] = useState(0);
@@ -470,6 +489,9 @@ export default function BuyersPage() {
     if (q && !b.full_name.toLowerCase().includes(q) && !b.email.toLowerCase().includes(q)) return false;
     if (tierFilter && b.buyer_tier !== tierFilter) return false;
     if (statusFilter && b.status !== statusFilter) return false;
+    if (verificationFilter === "verified" && !b.email_verified) return false;
+    if (verificationFilter === "unverified" && b.email_verified) return false;
+    if (verificationFilter === "invalid" && b.email_verification_status !== "invalid") return false;
     return true;
   });
 
@@ -480,7 +502,7 @@ export default function BuyersPage() {
   // Reset page when filters change
   useEffect(() => {
     setPage(0);
-  }, [search, tierFilter, statusFilter]);
+  }, [search, tierFilter, statusFilter, verificationFilter]);
 
   // -----------------------------------------------------------------------
   // Validation
@@ -689,12 +711,27 @@ export default function BuyersPage() {
             <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
 
-          {(search || tierFilter || statusFilter) && (
+          <div className="relative">
+            <select
+              className="appearance-none pl-3 pr-8 py-2 rounded-lg border border-slate-700 bg-slate-800/50 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-colors"
+              value={verificationFilter}
+              onChange={(e) => setVerificationFilter(e.target.value)}
+            >
+              <option value="">All Emails</option>
+              <option value="verified">Verified</option>
+              <option value="unverified">Unverified</option>
+              <option value="invalid">Invalid</option>
+            </select>
+            <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          </div>
+
+          {(search || tierFilter || statusFilter || verificationFilter) && (
             <button
               onClick={() => {
                 setSearch("");
                 setTierFilter("");
                 setStatusFilter("");
+                setVerificationFilter("");
               }}
               className="text-sm text-slate-400 hover:text-white transition-colors"
             >
