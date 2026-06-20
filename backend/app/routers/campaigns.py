@@ -182,7 +182,7 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                     campaign.buyer_profile_updated = True
                     buybox_updated_flag = True
                     db.add(campaign)
-                    # Regenerate embedding via Cohere
+                    # Regenerate embedding via local model
                     try:
                         from app.services.embeddings import generate_embedding
                         new_embedding = await generate_embedding(

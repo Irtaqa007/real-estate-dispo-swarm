@@ -35,7 +35,11 @@ async def lifespan(app: FastAPI):
     try:
         await test_connection()
     except Exception as e:
-        logger.warning("Database connection test failed on startup: %s. App will start but DB-dependent features may fail.", e)
+        logger.warning(
+            "Database connection test failed on startup. Full exception:\n%s. "
+            "App will start but DB-dependent features may fail.",
+            e, exc_info=True,
+        )
     
     # Register pgvector extension (non-fatal)
     try:

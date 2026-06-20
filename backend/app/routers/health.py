@@ -30,12 +30,41 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/api/health")
+async def health_check_fast(db: AsyncSession = Depends(get_db)):
+    """Fast, minimal health check for Docker/orchestrator healthchecks.
+
+    Does exactly ONE database round trip and nothing else. This endpoint
+    is polled every 10s by Docker's healthcheck -- it must not do
+    multiple sequential DB queries or external API calls (Cohere, Groq),
+    since each adds real latency (especially under NullPool, where every
+    query opens a fresh connection) and can push total response time
+    past the healthcheck timeout, causing false-positive "unhealthy"
+    states even though the app is actually fine.
+
+    For full system diagnostics (Gmail circuit breaker, Groq/Cohere
+    status, campaign counts, resilience metrics), use
+    GET /api/health/detailed instead.
+    """
+    try:
+        await db.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except Exception:
+        return {"status": "degraded"}
+
+
+@router.get("/api/health/detailed")
 async def health_check(db: AsyncSession = Depends(get_db)):
     """Comprehensive health check for the entire system.
 
     Returns:
         dict with: status, timestamp, db, gmail, groq, scheduler,
                   pending_campaigns, failed_campaigns, resilience.
+
+    NOTE: This endpoint is intentionally NOT used by Docker's
+    healthcheck -- it does 5+ sequential DB queries plus an external
+    Cohere API call, which is too slow/heavy to poll every 10s. Use
+    this for manual diagnostics or a dashboard status page instead.
+    See /api/health for the fast version used by orchestration.
     """
     now = datetime.now(timezone.utc)
 

@@ -469,7 +469,7 @@ class TestProcessQueuedMatches:
 
     @pytest.mark.asyncio
     async def test_buyer_released(self, mock_db, buyer_id, deal_id, mock_deal, mock_buyer, mock_queued_match):
-        """Buyer below cap should have their oldest match released."""
+        """Buyer below cap should have their oldest match released and campaign launched."""
         waiting_buyer = MagicMock(buyer_id=buyer_id)
 
         # The oldest match query returns mock_queued_match
@@ -482,15 +482,26 @@ class TestProcessQueuedMatches:
         ])
         mock_db.get = AsyncMock(side_effect=[mock_deal, mock_buyer])
 
+        mock_launch = AsyncMock(return_value={
+            "success": True, "touches_created": 6, "reason": "ok",
+            "campaign_ids": [str(uuid.uuid4())] * 6,
+        })
+
         with patch.object(ms, "get_active_deal_count_for_buyer", AsyncMock(return_value=1)):
-            with patch.object(ms.logger, "info"):  # Suppress logging
-                count = await ms.process_queued_matches(mock_db)
+            with patch.object(ms, "launch_campaign_for_buyer", mock_launch):
+                with patch.object(ms.logger, "info"):
+                    count = await ms.process_queued_matches(mock_db)
 
         assert count == 1
         assert mock_queued_match.status == "released"
         assert mock_queued_match.released_at is not None
         mock_db.add.assert_called_with(mock_queued_match)
         mock_db.commit.assert_awaited()
+        mock_launch.assert_awaited_once()
+        call_kwargs = mock_launch.call_args[1]
+        assert call_kwargs["buyer"] == mock_buyer
+        assert call_kwargs["deal"] == mock_deal
+        assert call_kwargs["similarity_score"] == mock_queued_match.similarity_score
 
     @pytest.mark.asyncio
     async def test_invalidated_deal_gone(self, mock_db, buyer_id, mock_queued_match):
@@ -641,6 +652,11 @@ class TestProcessQueuedMatches:
             FakeResult(waiting_buyers),   # 1st: find waiting buyers
         ])
 
+        mock_launch = AsyncMock(return_value={
+            "success": True, "touches_created": 6, "reason": "ok",
+            "campaign_ids": [str(uuid.uuid4())] * 6,
+        })
+
         with patch.object(ms, "get_active_deal_count_for_buyer", AsyncMock(side_effect=[2, 1, 3])):
             with patch.object(ms.logger, "info"):
                 match2_result = MagicMock()
@@ -668,12 +684,14 @@ class TestProcessQueuedMatches:
 
                 mock_db.get = AsyncMock(side_effect=[deal2, buyer2])
 
-                count = await ms.process_queued_matches(mock_db)
+                with patch.object(ms, "launch_campaign_for_buyer", mock_launch):
+                    count = await ms.process_queued_matches(mock_db)
 
                 assert count == 1
                 assert match2.status == "released"
                 assert match2.released_at is not None
                 mock_db.commit.assert_awaited()
+                mock_launch.assert_awaited_once()
 
 
 # ===========================================================================
@@ -739,3 +757,91 @@ class TestInvalidateQueuedMatchesForBuyer:
         count = await ms.invalidate_queued_matches_for_buyer(mock_db, buyer_id)
         assert count == 1
         assert waiting.status == "invalidated"
+
+
+# ===========================================================================
+# process_queued_matches + campaign launch integration tests
+# ===========================================================================
+
+class TestProcessQueuedMatchesCampaignLaunch:
+    """Tests that verify campaign launcher is called on release."""
+
+    @pytest.mark.asyncio
+    async def test_campaign_launcher_called_on_release(self, mock_db, buyer_id, deal_id, mock_deal, mock_buyer, mock_queued_match):
+        """When a match is released, launch_campaign_for_buyer should be called."""
+        waiting_buyer = MagicMock(buyer_id=buyer_id)
+        match_result = MagicMock()
+        match_result.scalar_one_or_none.return_value = mock_queued_match
+
+        mock_db.execute = AsyncMock(side_effect=[
+            FakeResult([waiting_buyer]),
+            match_result,
+        ])
+        mock_db.get = AsyncMock(side_effect=[mock_deal, mock_buyer])
+
+        mock_launch = AsyncMock(return_value={
+            "success": True, "touches_created": 6, "reason": "ok",
+            "campaign_ids": [str(uuid.uuid4())] * 6,
+        })
+
+        with patch.object(ms, "get_active_deal_count_for_buyer", AsyncMock(return_value=0)):
+            with patch.object(ms, "launch_campaign_for_buyer", mock_launch):
+                count = await ms.process_queued_matches(mock_db)
+
+        assert count == 1
+        mock_launch.assert_awaited_once()
+        launch_args = mock_launch.call_args[1]
+        assert launch_args["buyer"] == mock_buyer
+        assert launch_args["deal"] == mock_deal
+
+    @pytest.mark.asyncio
+    async def test_campaign_launch_failure_keeps_match_waiting(self, mock_db, buyer_id, deal_id, mock_deal, mock_buyer, mock_queued_match):
+        """If campaign launch raises, the match should stay 'waiting' for retry."""
+        waiting_buyer = MagicMock(buyer_id=buyer_id)
+        match_result = MagicMock()
+        match_result.scalar_one_or_none.return_value = mock_queued_match
+
+        mock_db.execute = AsyncMock(side_effect=[
+            FakeResult([waiting_buyer]),
+            match_result,
+        ])
+        mock_db.get = AsyncMock(side_effect=[mock_deal, mock_buyer])
+
+        mock_launch = AsyncMock(side_effect=RuntimeError("Groq API timeout"))
+
+        with patch.object(ms, "get_active_deal_count_for_buyer", AsyncMock(return_value=1)):
+            with patch.object(ms, "launch_campaign_for_buyer", mock_launch):
+                count = await ms.process_queued_matches(mock_db)
+
+        # Match stays 'waiting' — will retry next scheduler cycle
+        assert count == 0
+        assert mock_queued_match.status == "waiting"
+        mock_db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_campaign_launch_skipped_keeps_match_waiting(self, mock_db, buyer_id, deal_id, mock_deal, mock_buyer, mock_queued_match):
+        """If campaign launch returns success=False (ineligible), match stays 'waiting'."""
+        waiting_buyer = MagicMock(buyer_id=buyer_id)
+        match_result = MagicMock()
+        match_result.scalar_one_or_none.return_value = mock_queued_match
+
+        mock_db.execute = AsyncMock(side_effect=[
+            FakeResult([waiting_buyer]),
+            match_result,
+        ])
+        mock_db.get = AsyncMock(side_effect=[mock_deal, mock_buyer])
+
+        mock_launch = AsyncMock(return_value={
+            "success": False, "touches_created": 0,
+            "reason": "fatigued: too many pitches",
+            "campaign_ids": [],
+        })
+
+        with patch.object(ms, "get_active_deal_count_for_buyer", AsyncMock(return_value=1)):
+            with patch.object(ms, "launch_campaign_for_buyer", mock_launch):
+                count = await ms.process_queued_matches(mock_db)
+
+        # Match stays 'waiting' — will retry next scheduler cycle
+        assert count == 0
+        assert mock_queued_match.status == "waiting"
+        mock_launch.assert_awaited_once()

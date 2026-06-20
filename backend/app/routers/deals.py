@@ -38,7 +38,7 @@ async def create_deal(
     """Create a new deal. Spread is computed automatically by the database.
 
     Deal embedding is generated in a background task so the API returns
-    immediately without waiting for the Cohere API call.
+    immediately without waiting for the embedding model call.
     """
 
     # Deal Similarity Deduplication (feature 2): check for duplicates
@@ -526,7 +526,7 @@ async def _generate_deal_embedding_background(deal_id: uuid.UUID, narrative: str
     """Generate deal embedding in the background after creation.
 
     This runs as a FastAPI BackgroundTask so the API response is not
-    blocked by the Cohere API call.
+    blocked by the embedding model call.
     """
     if not narrative:
         return

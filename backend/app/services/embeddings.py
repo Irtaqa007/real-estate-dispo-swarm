@@ -1,114 +1,95 @@
-"""Cohere embedding service for semantic vector search.
+"""Local embedding service using sentence-transformers.
 
-Generates 1024-dimension embeddings using Cohere's embed API.
-- search_document input type for deal narratives
-- search_query input type for buyer buy_boxes
+Generates 1024-dimension embeddings using mxbai-embed-large-v1 running
+locally on CPU. No external API calls required.
+
+Replaces the previous Cohere embed-english-v3.0 integration.
 """
 
 import logging
-from typing import Optional
-
-import cohere
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Lazy-init client so we don't fail import if COHERE_API_KEY is not set
-_client: Optional[cohere.AsyncClient] = None
+# Lazy-loaded model — avoids importing sentence_transformers at module level
+# so the import cost is paid only on first embedding call.
+_model = None
+_model_name = "mixedbread-ai/mxbai-embed-large-v1"
+_embedding_dim = 1024
 
 
-def _get_client() -> cohere.AsyncClient:
-    """Get or create the Cohere async client."""
-    global _client
-    if _client is None:
-        api_key = settings.cohere_api_key
-        if not api_key:
-            raise ValueError(
-                "COHERE_API_KEY is not set. Add it to your .env file."
-            )
-        _client = cohere.AsyncClient(api_key=api_key, timeout=30)
-    return _client
+def _get_model():
+    """Load the sentence-transformers model on first call."""
+    global _model
+    if _model is None:
+        logger.info("Loading embedding model: %s (first call, may take ~30s)", _model_name)
+        from sentence_transformers import SentenceTransformer
+        token = settings.hf_token or None  # pass None if not set so no auth is attempted
+        _model = SentenceTransformer(_model_name, token=token)
+        logger.info("Embedding model loaded (dim=%d)", _embedding_dim)
+    return _model
 
 
 async def generate_embedding(
     text: str,
     input_type: str = "search_document",
 ) -> list[float]:
-    """Generate a 1024-dim embedding vector using Cohere's embed API.
+    """Generate a 1024-dim embedding vector using the local mxbai model.
 
     Args:
         text: The text to embed.
-        input_type: One of "search_document" (for deal narratives) or
-                    "search_query" (for buyer buy_boxes).
+        input_type: Kept for API compatibility with callers. The local model
+                    does not differentiate between document and query inputs.
 
     Returns:
         A list of 1024 floats representing the embedding vector.
 
     Raises:
-        ValueError: If COHERE_API_KEY is not configured.
-        RuntimeError: If the Cohere API call fails.
+        RuntimeError: If the model fails to generate an embedding.
     """
     if not text or not text.strip():
         logger.warning("Empty text provided for embedding, returning zero vector")
-        return [0.0] * 1024
-
-    client = _get_client()
+        return [0.0] * _embedding_dim
 
     try:
-        response = await client.embed(
-            texts=[text],
-            model="embed-english-v3.0",
-            input_type=input_type,
+        model = _get_model()
+        # sentence_transformers encode is synchronous — run in executor
+        import asyncio
+        loop = asyncio.get_running_loop()
+        embedding = await loop.run_in_executor(
+            None,
+            lambda: model.encode(text, normalize_embeddings=True).tolist(),
         )
-        embedding = [float(x) for x in response.embeddings[0]]
         logger.debug(
             "Generated embedding (dim=%d) for text[:60]=%r",
-            len(embedding),
-            text[:60],
+            len(embedding), text[:60],
         )
         return embedding
     except Exception as e:
-        logger.error("Cohere embedding failed: %s", e, exc_info=True)
+        logger.error("Local embedding failed: %s", e, exc_info=True)
         raise RuntimeError(f"Failed to generate embedding: {e}") from e
 
 
-async def check_cohere_health() -> dict:
-    """Check Cohere API connectivity.
-
-    Makes a lightweight embedding call with a short test string to verify
-    the API key is valid and the service is responsive. The cost is
-    negligible (a few tokens).
+async def check_embedding_health() -> dict:
+    """Check that the local embedding model is loaded and functional.
 
     Returns:
         dict with keys:
-            configured (bool): Whether COHERE_API_KEY is set.
-            reachable (bool): Whether the API responded successfully.
+            configured (bool): Always True (local model, no API key needed).
+            reachable (bool): Whether the model produced a valid embedding.
             latency_ms (float|None): Response time in milliseconds.
             error (str|None): Error message if the check failed.
     """
-    if not settings.cohere_api_key:
-        return {
-            "configured": False,
-            "reachable": False,
-            "latency_ms": None,
-            "error": "COHERE_API_KEY is not configured",
-        }
-
     import time
 
     try:
         start = time.monotonic()
-        client = _get_client()
-        response = await client.embed(
-            texts=["health check"],
-            model="embed-english-v3.0",
-            input_type="search_document",
-        )
+        embedding = await generate_embedding("health check")
         elapsed = (time.monotonic() - start) * 1000
 
-        if response and response.embeddings:
-            logger.debug("Cohere health check passed (%.1fms)", elapsed)
+        if embedding and len(embedding) == _embedding_dim:
+            logger.debug("Embedding health check passed (%.1fms)", elapsed)
             return {
                 "configured": True,
                 "reachable": True,
@@ -120,13 +101,17 @@ async def check_cohere_health() -> dict:
                 "configured": True,
                 "reachable": False,
                 "latency_ms": round(elapsed, 1),
-                "error": "Empty response from Cohere API",
+                "error": f"Unexpected embedding dimensions: {len(embedding)}",
             }
     except Exception as e:
-        logger.warning("Cohere health check failed: %s", e, exc_info=True)
+        logger.warning("Embedding health check failed: %s", e, exc_info=True)
         return {
             "configured": True,
             "reachable": False,
             "latency_ms": None,
             "error": str(e)[:200],
         }
+
+
+# Keep old name as alias for backward compatibility
+check_cohere_health = check_embedding_health

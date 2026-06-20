@@ -224,7 +224,7 @@ async def process_buyer_replies() -> int:
     3. Update campaign with reply data + set status to "Replied"
     4. Update buyer's last_reply_at timestamp
     5. Buy Box Auto-Update: if buybox changed, extract new criteria via Groq,
-       regenerate Cohere embedding, log changes
+       regenerate embedding, log changes
     6. Auto-pause remaining queued touches for that buyer+deal
     7. Log to activity_log
     8. Smart Negotiation: Counter offers auto-approved if >= floor price

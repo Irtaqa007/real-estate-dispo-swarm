@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+from urllib.parse import urlparse
 
 
 class Settings(BaseSettings):
@@ -18,9 +19,6 @@ class Settings(BaseSettings):
     # Groq
     groq_api_key: Optional[str] = None
     groq_model: str = "llama-3.3-70b-versatile"
-
-    # Cohere
-    cohere_api_key: Optional[str] = None
 
     # Gmail
     gmail_address: Optional[str] = None
@@ -44,14 +42,49 @@ class Settings(BaseSettings):
     # SSL mode for database connections ("require", "prefer", "disable", etc.)
     database_ssl_mode: str = "require"
 
+    # Database connection timeout in seconds (default 30)
+    database_connect_timeout: int = 30
+
+    # Database command/query timeout in seconds (default 60)
+    database_command_timeout: int = 60
+
     # Database — must be set via DATABASE_URL in .env or environment
     database_url: str
+
+    # HuggingFace token for gated models (e.g., sentence-transformers)
+    hf_token: Optional[str] = None
+
+    # Force IPv4 when connecting to the database — resolves the hostname to an
+    # IPv4 address before connecting. Set to False if your network supports IPv6
+    # connections to your database host.
+    force_ipv4: bool = True
 
     # Matching similarity threshold — minimum cosine similarity score for a
     # buyer-deal match to be considered valid. Below this threshold, no match.
     match_similarity_threshold: float = 0.65
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
+
+    @property
+    def database_host(self) -> Optional[str]:
+        """Parse the hostname from DATABASE_URL for connectivity testing."""
+        try:
+            # Normalize: handle both postgresql:// and postgresql+asyncpg:// schemes
+            url = self.database_url.replace("postgresql+asyncpg://", "postgresql://")
+            parsed = urlparse(url)
+            return parsed.hostname
+        except Exception:
+            return None
+
+    @property
+    def database_port(self) -> int:
+        """Parse the port from DATABASE_URL."""
+        try:
+            url = self.database_url.replace("postgresql+asyncpg://", "postgresql://")
+            parsed = urlparse(url)
+            return parsed.port or 5432
+        except Exception:
+            return 5432
 
 
 settings = Settings()

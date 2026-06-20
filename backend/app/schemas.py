@@ -118,12 +118,17 @@ class JVPartnerResponse(JVPartnerBase):
     model_config = {"from_attributes": True}
 
 
-class DealBase(BaseModel):
-    """Shared fields for deal CRUD operations.
+class DealFields(BaseModel):
+    """Pure field definitions for a deal, with NO validators.
 
-    Validates conditional fields based on property_type:
-    - House: beds, baths, sqft required
-    - Land: lot_size, zoning required
+    DealBase (below) extends this with create/update-time validation
+    rules. DealResponse inherits directly from DealFields instead of
+    DealBase, so reading existing rows from the database never fails
+    validation just because they predate a rule, or were written by a
+    path that didn't enforce it. Validation belongs on the way IN
+    (create/update), never on the way OUT (response) -- a read
+    endpoint should reflect what's actually in the database, not
+    reject it.
     """
 
     address: str = Field(..., min_length=1)
@@ -151,6 +156,18 @@ class DealBase(BaseModel):
     photos: Optional[list[str]] = None
     jv_partner_id: UUID = Field(...)  # Required — every deal must have a JV partner
     jv_split_percentage: Optional[float] = Field(default=50, ge=0, le=100)
+
+
+class DealBase(DealFields):
+    """Shared fields + validation for deal CREATE/UPDATE operations only.
+
+    Validates conditional fields based on property_type:
+    - House: beds, baths, sqft required
+    - Land: lot_size, zoning required
+
+    Do NOT use this as a base for response schemas — see DealFields
+    and DealResponse for why.
+    """
 
     @model_validator(mode="after")
     def validate_property_fields(self) -> "DealBase":
@@ -249,14 +266,29 @@ class DealUpdate(BaseModel):
         return self
 
 
-class DealResponse(DealBase):
+class DealResponse(DealFields):
     """Schema for deal responses. Includes all DB-generated fields.
 
-    Note: jv_partner_id is overridden as Optional to support existing deals
-    created before JV partner became required.
+    Inherits from DealFields (fields only, no validators) rather than
+    DealBase, so existing rows that predate a validation rule -- or
+    have any null/incomplete field for any reason -- can still be
+    read back successfully. Validation belongs on create/update, not
+    on read.
+
+    Several fields that are required on DealCreate are re-declared as
+    Optional here for the same reason: a response schema should
+    reflect what's actually in the database, not reject rows that
+    don't (yet, or anymore) fully satisfy input-time rules.
     """
 
     id: UUID
+    property_type: Optional[str] = None
+    condition_description: Optional[str] = None
+    arv: Optional[float] = None
+    asking_price: Optional[float] = None
+    floor_price: Optional[float] = None
+    contract_price: Optional[float] = None
+    title_status: Optional[str] = None
     status: str = "Available"
     assigned_buyer_id: Optional[UUID] = None
     jv_partner_id: Optional[UUID] = None

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.schemas import Campaign, Deal, QueuedDealMatch
 from app.schemas import BuyerMatchResult
+from app.services.campaign_launcher import launch_campaign_for_buyer
 
 logger = logging.getLogger(__name__)
 
@@ -275,9 +276,10 @@ async def process_queued_matches(db: AsyncSession) -> int:
     1. Count their current active deals
     2. If < 2, pick the oldest 'waiting' match
     3. Re-validate against the buyer's CURRENT buy_box and hard filters
-    4. If still valid, mark as 'released' (the caller/campaign launch
-       will pick it up)
-    5. If no longer valid, mark as 'invalidated'
+    4. If still valid, launch a 6-touch campaign via launch_campaign_for_buyer,
+       then mark as 'released'
+    5. If campaign launch fails, the match stays 'waiting' for retry
+    6. If no longer valid, mark as 'invalidated'
 
     Returns:
         Number of matches released.
@@ -360,16 +362,35 @@ async def process_queued_matches(db: AsyncSession) -> int:
                     logger.info("Queued match %s invalidated: city not in preferences", match.id)
                     continue
 
-            # All checks passed — release
-            match.status = "released"
-            match.released_at = now
-            db.add(match)
-            released_count += 1
-            logger.info(
-                "Queued match %s released: buyer %s now has %d active deals, "
-                "match for deal %s is valid",
-                match.id, buyer_id, active_count, match.deal_id,
-            )
+            # All checks passed — launch campaign, then release on success
+            try:
+                launch_result = await launch_campaign_for_buyer(
+                    db=db,
+                    buyer=buyer,
+                    deal=deal,
+                    similarity_score=match.similarity_score,
+                )
+                if launch_result["success"]:
+                    match.status = "released"
+                    match.released_at = now
+                    db.add(match)
+                    released_count += 1
+                    logger.info(
+                        "Queued match %s released and %d-touch campaign launched "
+                        "for buyer %s (active deals: %d)",
+                        match.id, launch_result["touches_created"],
+                        buyer_id, active_count,
+                    )
+                else:
+                    logger.warning(
+                        "Queued match %s: campaign launch skipped for buyer %s: %s — staying waiting",
+                        match.id, buyer_id, launch_result["reason"],
+                    )
+            except Exception as launch_err:
+                logger.error(
+                    "Queued match %s: campaign launch failed for buyer %s: %s — staying waiting",
+                    match.id, buyer_id, launch_err, exc_info=True,
+                )
 
         except Exception as e:
             logger.warning(
