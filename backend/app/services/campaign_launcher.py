@@ -55,13 +55,17 @@ async def launch_campaign_for_buyer(
             - success: bool
             - touches_created: int (0 if skipped)
             - reason: str (skip reason or "ok")
-            - campaign_ids: list of created Campaign IDs
+            - campaign_ids: list of created Campaign IDs (UUID strings)
+            - touches: list of dicts with touch, subject, body, status,
+              scheduled_send_at (ISO str or None) — only populated when
+              touches were actually created
     """
     result: Dict = {
         "success": False,
         "touches_created": 0,
         "reason": "",
         "campaign_ids": [],
+        "touches": [],
     }
 
     buyer_id = buyer.id
@@ -188,6 +192,13 @@ async def launch_campaign_for_buyer(
 
         touch_records.append(campaign_record)
         result["campaign_ids"].append(str(campaign_record.id))
+        result["touches"].append({
+            "touch": touch_num,
+            "subject": email_data.get("subject", ""),
+            "body": email_data.get("body", ""),
+            "status": touch_status,
+            "scheduled_send_at": scheduled_send.isoformat() if scheduled_send else None,
+        })
 
     db.add_all(touch_records)
 

@@ -107,6 +107,16 @@ async def _create_engine_with_retry(max_retries=10, retry_delay=5):
         except Exception as e:
             logger.error(f"Connection attempt {attempt + 1} failed: {type(e).__name__}: {e}")
 
+            # Dispose the failed engine before retrying. Without this,
+            # each failed attempt's engine object (and any connections
+            # it may have opened, e.g. during the SELECT 1 test) is
+            # simply abandoned and left for garbage collection rather
+            # than cleanly released -- a real leak across repeated
+            # retries before an eventual successful connection.
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
 
             if attempt < max_retries - 1:
                 wait_time = retry_delay * (2 ** attempt)

@@ -3,11 +3,11 @@
 import logging
 import smtplib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -23,13 +23,13 @@ from app.schemas import (
     SendAllResponse,
     SendResponse,
 )
-from app.services.email_generator import generate_touch_email, TOUCH_CONFIGS
+from app.services.campaign_launcher import launch_campaign_for_buyer
 from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
 from app.services.dead_letter_queue import move_to_dlq
 from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message
 from app.services.title_coordinator import send_assignment_contract
-from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection, increment_pitch_count
+from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection
 from app.services.buyer_merge import merge_buy_boxes
 from app.services.matching_service import find_top_matches_for_deal, invalidate_queued_matches_for_buyer
 from app.services.negotiation import handle_counter_offer
@@ -664,109 +664,32 @@ async def launch_campaign(
         if tier in tier_counts:
             tier_counts[tier] += 1
 
-    # 4. Generate campaigns for each buyer (staggered)
-    launch_time = datetime.now(timezone.utc)
+    # 4. Generate campaigns for each buyer via shared function
     all_results: List[CampaignLaunchResult] = []
     total_touches_created = 0
 
     for match, buyer in final_pairs:
-        buyer_touches = []
-        touch_records = []
+        launch_result = await launch_campaign_for_buyer(
+            db=db,
+            buyer=buyer,
+            deal=deal,
+            similarity_score=float(match.similarity),
+        )
 
-        for config in TOUCH_CONFIGS:
-            touch_num = config["touch"]
-
-            # Generate email via Groq (with unsubscribe footer)
-            email_data = await generate_touch_email(
-                touch=touch_num,
-                buyer_name=match.full_name,
-                buyer_email=match.email,
-                buy_box=match.buy_box,
-                buyer_tier=match.buyer_tier,
-                address=deal.address,
-                city=deal.city or "",
-                state=deal.state or "",
-                property_type=deal.property_type,
-                arv=float(deal.arv),
-                asking_price=float(deal.asking_price),
-                spread=float(deal.spread) if deal.spread else 0,
-                condition_description=deal.condition_description,
-                beds=deal.beds,
-                baths=deal.baths,
-                sqft=deal.sqft,
-                buyer_id=match.id,
-            )
-
-            # Calculate scheduled send time based on touch timing
-            scheduled = launch_time + timedelta(days=config["delay_days"])
-
-            # Staggered launch (feature 7):
-            # - Day 0: A-List touch 1 sends immediately
-            # - Day 1: B-List touch 1 gets scheduled for day 1
-            # - Day 3: C-List touch 1 gets scheduled for day 3
-            buyer_tier = match.buyer_tier or 'C-List'
-            if touch_num == 1:
-                if buyer_tier == "A-List":
-                    touch_status = "Sent"  # Send immediately
-                    scheduled_send = launch_time  # Will send now
-                elif buyer_tier == "B-List":
-                    touch_status = "Queued"
-                    scheduled_send = launch_time + timedelta(days=1)
-                else:  # C-List
-                    touch_status = "Queued"
-                    scheduled_send = launch_time + timedelta(days=3)
-            else:
-                touch_status = "Queued" if touch_num > 1 else "Sent"
-                # For B-List and C-List, their touch 2+ offsets are relative to
-                # when their touch 1 fires, not the original launch time
-                base_time = launch_time
-                if buyer_tier == "B-List":
-                    base_time = launch_time + timedelta(days=1)
-                elif buyer_tier == "C-List":
-                    base_time = launch_time + timedelta(days=3)
-                scheduled_send = base_time + timedelta(days=config["delay_days"])
-
-            # Create Campaign DB record
-            campaign_record = Campaign(
-                id=uuid.uuid4(),
-                deal_id=deal_id,
-                buyer_id=match.id,
-                touch_number=touch_num,
-                status=touch_status,
-                subject=email_data.get("subject", ""),
-                body=email_data.get("body", ""),
-                scheduled_send_at=scheduled_send,
-            )
-
-            # Send touch 1 immediately (A-List only)
-            if touch_num == 1 and touch_status == "Sent":
-                try:
-                    await send_email(
-                        to=match.email,
-                        subject=email_data.get("subject", ""),
-                        body=email_data.get("body", ""),
-                        campaign_id=campaign_record.id.hex,
-                    )
-                    campaign_record.sent_at = datetime.now(timezone.utc)
-
-                    # Increment fatigue counter for this buyer (already have full buyer object)
-                    await increment_pitch_count(db, buyer)
-                except Exception as e:
-                    logger.warning("Failed to auto-send touch 1 for buyer %s: %s", match.id, e, exc_info=True)
-                    campaign_record.status = "Queued"
-            touch_records.append(campaign_record)
-            total_touches_created += 1
-
-            buyer_touches.append(CampaignTouch(
-                touch=touch_num,
-                subject=email_data.get("subject", ""),
-                body=email_data.get("body", ""),
-                status=email_data.get("status", "Queued"),
-                scheduled_at=scheduled.isoformat(),
-            ))
-
-        # Save all touches for this buyer
-        db.add_all(touch_records)
+        if launch_result["success"]:
+            total_touches_created += launch_result["touches_created"]
+            buyer_touches = [
+                CampaignTouch(
+                    touch=t["touch"],
+                    subject=t["subject"],
+                    body=t["body"],
+                    status=t["status"],
+                    scheduled_at=t["scheduled_send_at"],
+                )
+                for t in launch_result["touches"]
+            ]
+        else:
+            buyer_touches = []
 
         all_results.append(CampaignLaunchResult(
             buyer_id=match.id,
