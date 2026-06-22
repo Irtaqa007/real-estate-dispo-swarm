@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.config import settings
+from app.database import get_db, async_session_factory
 from app.models.schemas import ActivityLog, Buyer, BuyerEmail, Campaign, Deal, JVPartner
 from app.schemas import (
     CampaignLaunchResponse,
@@ -31,7 +33,11 @@ from app.services.reply_processor import process_reply, extract_buybox_changes, 
 from app.services.title_coordinator import send_assignment_contract
 from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection
 from app.services.buyer_merge import merge_buy_boxes
-from app.services.matching_service import find_top_matches_for_deal, invalidate_queued_matches_for_buyer
+from app.services.matching_service import (
+    find_top_matches_for_deal,
+    invalidate_queued_matches_for_buyer,
+    process_queued_matches,
+)
 from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
 from app.services.jv_rotator import check_jv_rotation
@@ -157,7 +163,11 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
         campaign.reply_body = reply["body"]
         campaign.reply_intent = classification["reply_intent"]
         campaign.ai_extracted_insights = classification["ai_extracted_insights"]
-        campaign.status = "Replied"
+        # FEATURE 2: Pass intent is terminal — frees buyer's active slot
+        if classification["reply_intent"] == "Pass":
+            campaign.status = "Passed"
+        else:
+            campaign.status = "Replied"
         db.add(campaign)
 
         # 7. Fetch buyer once for all updates
@@ -438,6 +448,25 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
     # 11. Commit all changes
     await db.commit()
 
+    # FEATURE 2: Event-driven queued match release
+    # After buyers pass (Pass intent), immediately process their
+    # queued matches so they can be matched to other deals.
+    for result_item in results:
+        if result_item.reply_intent == "Pass" and result_item.buyer_id:
+            try:
+                async with async_session_factory() as release_db:
+                    released = await process_queued_matches(
+                        release_db, buyer_id=result_item.buyer_id,
+                    )
+                    if released > 0:
+                        await release_db.commit()
+            except Exception as release_err:
+                logger.warning(
+                    "Failed to process queued matches for buyer %s "
+                    "after Pass reply: %s",
+                    result_item.buyer_id, release_err, exc_info=True,
+                )
+
     logger.info(
         "Check-replies complete: %d replies found, %d processed",
         len(replies), processed_count,
@@ -646,6 +675,48 @@ async def launch_campaign(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"All {len(all_matched)} matched buyers filtered out by eligibility or fatigue rules. Deal may need older buyers or manual override.",
+        )
+
+    # FEATURE 1: 50 Verified Buyer Minimum Gate
+    # If fewer than the configured minimum verified matched buyers are
+    # available, block the launch and alert via activity log.
+    verified_count = len(final_pairs)
+    if verified_count < settings.min_verified_buyers_to_launch:
+        logger.warning(
+            "Campaign launch blocked for deal %s (%s): only %d verified "
+            "matched buyers (need %d)",
+            deal_id, deal.address, verified_count,
+            settings.min_verified_buyers_to_launch,
+        )
+        # Log to activity log so it surfaces on the dashboard
+        await audit.log(
+            db,
+            entity_type="deal",
+            entity_id=deal_id,
+            action="campaign_launch_blocked",
+            metadata={
+                "reason": "insufficient_verified_buyers",
+                "verified_matched": verified_count,
+                "required": settings.min_verified_buyers_to_launch,
+                "deal_address": deal.address,
+                "deal_id": str(deal_id),
+                "severity": "warning",
+                "alert_user": True,
+            },
+        )
+        await db.commit()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "launched": False,
+                "reason": "insufficient_verified_buyers",
+                "verified_matched": verified_count,
+                "required": settings.min_verified_buyers_to_launch,
+                "message": (
+                    f"Add more buyers matching this deal before pitching. "
+                    f"Currently {verified_count} verified buyers match."
+                ),
+            },
         )
 
     # Sort by tier for Staggered Campaign Launch (feature 7): A-List first

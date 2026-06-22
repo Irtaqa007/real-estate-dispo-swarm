@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 import app.database as _db
+from app.config import settings
 from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, FailedCampaign
 from app.services.dead_letter_queue import retry_failed_campaign
 from app.services.gmail_monitor import check_for_replies
@@ -32,7 +33,7 @@ from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
 from app.services.state_persistence import save_all_state
 from app.services.circuit_breaker import gmail_circuit_breaker, get_cb_queue
-from app.services.matching_service import process_queued_matches, invalidate_queued_matches_for_buyer
+from app.services.matching_service import process_queued_matches, invalidate_queued_matches_for_buyer, match_all_active_deals
 from app.services.resilience import get_metrics, get_idempotency_store
 from app.services.groq_client import get_call_count_today, get_calls_today_date
 from app.services.buyer_merge import merge_buy_boxes
@@ -85,6 +86,12 @@ async def process_scheduled_campaigns() -> int:
             )
 
             sent_count = 0
+            # FEATURE 2: Track buyers whose campaigns were paused due to
+            # deal resolution, so we can trigger immediate queued match release.
+            # Only track deal-status pauses (Under Contract/Sold/Dead) — the
+            # "already replied" pause doesn't free a slot since the replied
+            # campaign still counts as active.
+            deal_resolved_buyer_ids: set[uuid.UUID] = set()
 
             for campaign in queued_campaigns:
                 try:
@@ -125,6 +132,8 @@ async def process_scheduled_campaigns() -> int:
                             "Scheduler: paused campaign %s (touch %d) — deal status is '%s'",
                             campaign.id, campaign.touch_number, deal.status,
                         )
+                        # FEATURE 2: Slot freed because deal resolved — track for release
+                        deal_resolved_buyer_ids.add(campaign.buyer_id)
                         continue
 
                     # 4. Check previous touch was sent (skip for touch 1)
@@ -202,6 +211,29 @@ async def process_scheduled_campaigns() -> int:
             # Commit all changes
             await db.commit()
 
+            # FEATURE 2: Event-driven queued match release
+            # After campaigns are paused because a deal resolved (Under Contract,
+            # Sold, Dead), trigger immediate release for affected buyers.
+            for bid in deal_resolved_buyer_ids:
+                try:
+                    async with _db.async_session_factory() as release_db:
+                        released = await process_queued_matches(
+                            release_db, buyer_id=bid,
+                        )
+                        if released > 0:
+                            logger.info(
+                                "Released %d queued matches for buyer %s "
+                                "(campaign paused due to deal resolution)",
+                                released, bid,
+                            )
+                            await release_db.commit()
+                except Exception as release_err:
+                    logger.warning(
+                        "Failed to process queued matches for buyer %s "
+                        "after campaign pause: %s",
+                        bid, release_err, exc_info=True,
+                    )
+
             logger.info("Scheduler: completed run — %d campaigns sent", sent_count)
             return sent_count
 
@@ -269,6 +301,9 @@ async def process_buyer_replies() -> int:
             # 3. Process each reply with per-reply isolation
             # so one failure never loses the entire batch
             processed_count = 0
+            # FEATURE 2: Track buyers who replied with Pass to trigger
+            # immediate queued match release after commit
+            passed_buyer_ids: list[uuid.UUID] = []
 
             for reply in replies:
                 try:
@@ -303,7 +338,12 @@ async def process_buyer_replies() -> int:
                     campaign.reply_body = reply["body"]
                     campaign.reply_intent = reply_intent
                     campaign.ai_extracted_insights = classification["ai_extracted_insights"]
-                    campaign.status = "Replied"
+                    # FEATURE 2: Pass intent is terminal — frees buyer's active slot
+                    if reply_intent == "Pass":
+                        campaign.status = "Passed"
+                        passed_buyer_ids.append(buyer_id)
+                    else:
+                        campaign.status = "Replied"
                     db.add(campaign)
 
                     # 7. Fetch buyer and update last_reply_at
@@ -595,6 +635,30 @@ async def process_buyer_replies() -> int:
             # Commit all changes
             await db.commit()
 
+            # FEATURE 2: Event-driven queued match release
+            # After buyers pass (Pass intent), immediately process their
+            # queued matches so they can be matched to other deals.
+            # Use a fresh session since the current one is committed.
+            if passed_buyer_ids:
+                for bid in passed_buyer_ids:
+                    try:
+                        async with _db.async_session_factory() as release_db:
+                            released = await process_queued_matches(
+                                release_db, buyer_id=bid,
+                            )
+                            if released > 0:
+                                logger.info(
+                                    "Released %d queued matches for buyer %s (Pass reply)",
+                                    released, bid,
+                                )
+                            await release_db.commit()
+                    except Exception as release_err:
+                        logger.warning(
+                            "Failed to process queued matches for buyer %s "
+                            "after Pass reply: %s",
+                            bid, release_err, exc_info=True,
+                        )
+
             logger.info(
                 "Scheduler: reply processing complete — %d/%d replies processed",
                 processed_count, len(replies),
@@ -635,6 +699,25 @@ async def _scheduler_loop() -> None:
 
     # Track when daily tasks last ran to avoid running them every hour
     _last_daily_run_date = None
+    # FEATURE 5: Track last auto-match run for periodic scheduling
+    _last_auto_match_time = datetime.min.replace(tzinfo=timezone.utc)
+
+    # ── FEATURE 5: Run auto-match once on startup ──
+    # Matches all active deals against eligible buyers immediately so that
+    # deals entered while the scheduler was stopped don't wait 6 hours.
+    try:
+        if settings.auto_match_enabled:
+            result = await match_all_active_deals()
+            if result["deals_processed"] > 0:
+                logger.info(
+                    "Initial auto-match: %d deals, %d campaigns launched, %d queued",
+                    result["deals_processed"],
+                    result["campaigns_launched"],
+                    result["buyers_queued"],
+                )
+            _last_auto_match_time = datetime.now(timezone.utc)
+    except Exception as e:
+        logger.error("Initial auto-match failed: %s", e, exc_info=True)
 
     try:
         while _running:
@@ -797,11 +880,34 @@ async def _scheduler_loop() -> None:
                 except Exception as e:
                     logger.error("Scheduler: DLQ auto-retry failed: %s", e, exc_info=True)
 
+            # ── FEATURE 5: Periodic auto-match ──
+            async def _task_auto_match() -> None:
+                hours_since = (
+                    datetime.now(timezone.utc) - _last_auto_match_time
+                ).total_seconds() / 3600
+                if (
+                    settings.auto_match_enabled
+                    and hours_since >= settings.auto_match_interval_hours
+                ):
+                    try:
+                        result = await match_all_active_deals()
+                        if result["deals_processed"] > 0:
+                            logger.info(
+                                "Periodic auto-match: %d deals, %d campaigns, %d queued",
+                                result["deals_processed"],
+                                result["campaigns_launched"],
+                                result["buyers_queued"],
+                            )
+                        _last_auto_match_time = datetime.now(timezone.utc)
+                    except Exception as e:
+                        logger.error("Periodic auto-match failed: %s", e, exc_info=True)
+
             await asyncio.gather(
                 _task_aging(),
                 _task_insights(),
                 _task_persist(),
                 _task_dlq_retry(),
+                _task_auto_match(),
                 return_exceptions=True,
             )
 
