@@ -154,6 +154,15 @@ def _build_prompt(
     beds: Optional[int] = None,
     baths: Optional[float] = None,
     sqft: Optional[int] = None,
+    # FEATURE 4: Buyer Intelligence parameters
+    deals_closed: int = 0,
+    last_reply_at: Optional[datetime] = None,
+    engagement_score: float = 0.0,
+    portfolio_insights: Optional[dict] = None,
+    avg_spread_closed: Optional[float] = None,
+    price_min: Optional[float] = None,
+    price_max: Optional[float] = None,
+    pref_cities: Optional[list[str]] = None,
 ) -> list[dict]:
     """Build the Groq chat prompt for generating a touch email."""
 
@@ -170,6 +179,73 @@ def _build_prompt(
         property_summary = "land"
     else:
         property_summary = property_type
+
+    # ── FEATURE 4: Buyer Intelligence section ──
+    intelligence_lines = []
+    if deals_closed > 0:
+        intelligence_lines.append(
+            f"Buyer has closed {deals_closed} deal(s) previously — reference their track "
+            f"record naturally in the email if relevant and natural, but don't mention "
+            f"it if it would feel forced."
+        )
+    if last_reply_at:
+        days_since = (datetime.now(timezone.utc) - last_reply_at).days
+        if days_since <= 7:
+            intelligence_lines.append(
+                f"Buyer last engaged {days_since} day(s) ago — warm tone, recent engagement."
+            )
+        elif days_since <= 30:
+            intelligence_lines.append(
+                f"Buyer last engaged {days_since} day(s) ago — moderate, normal follow-up."
+            )
+        else:
+            intelligence_lines.append(
+                f"Buyer last engaged {days_since} day(s) ago — re-engagement tone needed."
+            )
+    if engagement_score > 0:
+        if engagement_score >= 50:
+            intelligence_lines.append(
+                f"Engagement score: {engagement_score:.0f}/100 — very active, responsive buyer."
+            )
+        elif engagement_score >= 20:
+            intelligence_lines.append(
+                f"Engagement score: {engagement_score:.0f}/100 — moderately active buyer."
+            )
+        else:
+            intelligence_lines.append(
+                f"Engagement score: {engagement_score:.0f}/100 — low activity, needs convincing."
+            )
+    if avg_spread_closed is not None and avg_spread_closed > 0:
+        asking_or_above = "above" if asking_price >= avg_spread_closed else "below"
+        intelligence_lines.append(
+            f"Buyer's typical deal size: ${avg_spread_closed:,.0f} — this deal is "
+            f"{asking_or_above} their average spread."
+        )
+    if pref_cities:
+        cities_str = ", ".join(str(c) for c in pref_cities if c)
+        if cities_str:
+            intelligence_lines.append(
+                f"Buyer's preferred cities: [{cities_str}] — confirm this deal is in "
+                f"their geography either explicitly or implicitly."
+            )
+    if price_min is not None or price_max is not None:
+        price_range = f"${price_min:,.0f}–${price_max:,.0f}" if price_min is not None and price_max is not None else \
+                      f"${price_min:,.0f}+" if price_min is not None else \
+                      f"Up to ${price_max:,.0f}"
+        intelligence_lines.append(
+            f"Buyer price range: {price_range} — confirm the deal fits within this range."
+        )
+    if portfolio_insights:
+        pi_str = json.dumps(portfolio_insights, default=str)[:300]
+        intelligence_lines.append(
+            f"Portfolio insight context: {pi_str}"
+        )
+
+    intelligence_block = (
+        "\nBUYER INTELLIGENCE (use to personalize the email):\n"
+        + "\n".join(f"- {line}" for line in intelligence_lines)
+        + "\n"
+    ) if intelligence_lines else ""
 
     system_prompt = (
         "You are a wholesale real estate disposition expert with 15 years of experience. "
@@ -193,7 +269,8 @@ def _build_prompt(
         f"ARV: ${arv:,.0f}\n"
         f"Asking: ${asking_price:,.0f}\n"
         f"Spread: ${spread:,.0f}\n"
-        f"Condition: {condition_description}\n\n"
+        f"Condition: {condition_description}\n"
+        f"{intelligence_block}"
         f"PSYCHOLOGICAL ARC FOR TOUCH {touch}: {config['arc_description']}\n"
         f"REQUIRED POWER WORDS: {config['power_words']}\n"
         f"MAX SENTENCES: 4\n"
@@ -231,12 +308,28 @@ async def generate_touch_email(
     baths: Optional[float] = None,
     sqft: Optional[int] = None,
     buyer_id: Optional[UUID] = None,
+    # FEATURE 4: Buyer Intelligence parameters
+    deals_closed: int = 0,
+    last_reply_at: Optional[datetime] = None,
+    engagement_score: float = 0.0,
+    portfolio_insights: Optional[dict] = None,
+    avg_spread_closed: Optional[float] = None,
+    price_min: Optional[float] = None,
+    price_max: Optional[float] = None,
+    pref_cities: Optional[list[str]] = None,
 ) -> dict:
     """Generate a single touch email using Groq AI.
 
     Args:
         buyer_id: If provided, a CAN-SPAM compliant unsubscribe link
                   is appended to the email body.
+        deals_closed: Number of deals this buyer has closed.
+        last_reply_at: When the buyer last replied (for recency tone).
+        engagement_score: Activity score 0-100.
+        portfolio_insights: Any stored portfolio insights dict.
+        avg_spread_closed: Buyer's average deal spread.
+        price_min/max: Buyer's preferred price range.
+        pref_cities: Buyer's preferred cities/areas.
 
     Returns:
         dict with keys: subject, body, touch, status, scheduled_at
@@ -259,6 +352,14 @@ async def generate_touch_email(
         beds=beds,
         baths=baths,
         sqft=sqft,
+        deals_closed=deals_closed,
+        last_reply_at=last_reply_at,
+        engagement_score=engagement_score,
+        portfolio_insights=portfolio_insights,
+        avg_spread_closed=avg_spread_closed,
+        price_min=price_min,
+        price_max=price_max,
+        pref_cities=pref_cities,
     )
 
     try:

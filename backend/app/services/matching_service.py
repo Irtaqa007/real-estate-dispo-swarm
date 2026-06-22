@@ -18,7 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.schemas import Campaign, Deal, QueuedDealMatch
+from app.models.schemas import Buyer, Campaign, Deal, QueuedDealMatch
 from app.schemas import BuyerMatchResult
 from app.services.campaign_launcher import launch_campaign_for_buyer
 
@@ -268,9 +268,16 @@ async def get_active_deal_count_for_buyer(db: AsyncSession, buyer_id: UUID) -> i
     return len(result.fetchall())
 
 
-async def process_queued_matches(db: AsyncSession) -> int:
+async def process_queued_matches(
+    db: AsyncSession,
+    buyer_id: Optional[UUID] = None,
+) -> int:
     """Process queued deal matches for buyers whose active deal count
     has dropped below 2.
+
+    When ``buyer_id`` is provided, only processes that specific buyer
+    (event-driven trigger). When ``buyer_id`` is None (default), scans
+    ALL buyers with waiting matches (scheduler safety-net behavior).
 
     For each buyer with queued matches:
     1. Count their current active deals
@@ -281,15 +288,20 @@ async def process_queued_matches(db: AsyncSession) -> int:
     5. If campaign launch fails, the match stays 'waiting' for retry
     6. If no longer valid, mark as 'invalidated'
 
+    Args:
+        db: Database session.
+        buyer_id: Optional buyer UUID to scope processing to a single buyer.
+
     Returns:
         Number of matches released.
     """
-    # Find all unique buyers with waiting matches
-    waiting_buyers = await db.execute(
-        select(QueuedDealMatch.buyer_id)
-        .where(QueuedDealMatch.status == "waiting")
-        .distinct()
+    # Find buyers with waiting matches (scoped if buyer_id provided)
+    waiting_query = select(QueuedDealMatch.buyer_id).where(
+        QueuedDealMatch.status == "waiting"
     )
+    if buyer_id is not None:
+        waiting_query = waiting_query.where(QueuedDealMatch.buyer_id == buyer_id)
+    waiting_buyers = await db.execute(waiting_query.distinct())
     buyer_ids = [row.buyer_id for row in waiting_buyers]
 
     if not buyer_ids:
@@ -404,6 +416,166 @@ async def process_queued_matches(db: AsyncSession) -> int:
         logger.info("Released %d queued matches", released_count)
 
     return released_count
+
+
+async def trigger_release_for_deal_async(deal_id: UUID) -> int:
+    """Background task: process queued matches for ALL buyers who have
+    campaigns on the given deal, after the deal has been resolved
+    (Sold, Dead).
+
+    Opens its own database session so it can be called from anywhere
+    (endpoints, scheduler, background tasks) without sharing a session.
+
+    Args:
+        deal_id: UUID of the resolved deal.
+
+    Returns:
+        Number of queued matches released.
+    """
+    from app.database import async_session_factory
+    from app.models.schemas import Campaign
+
+    async with async_session_factory() as db:
+        try:
+            # Find all unique buyers with campaigns on this deal
+            result = await db.execute(
+                select(Campaign.buyer_id)
+                .where(Campaign.deal_id == deal_id)
+                .distinct()
+            )
+            buyer_ids = [row.buyer_id for row in result.all()]
+
+            if not buyer_ids:
+                logger.info(
+                    "trigger_release_for_deal: no buyers found for deal %s",
+                    deal_id,
+                )
+                return 0
+
+            total_released = 0
+            for bid in buyer_ids:
+                try:
+                    released = await process_queued_matches(db, buyer_id=bid)
+                    total_released += released
+                except Exception as buyer_err:
+                    logger.warning(
+                        "trigger_release_for_deal: failed to process buyer %s on deal %s: %s",
+                        bid, deal_id, buyer_err,
+                    )
+                    continue
+
+            await db.commit()
+
+            if total_released > 0:
+                logger.info(
+                    "trigger_release_for_deal: released %d queued matches across "
+                    "%d buyers for deal %s",
+                    total_released, len(buyer_ids), deal_id,
+                )
+
+            return total_released
+
+        except Exception as e:
+            logger.error(
+                "trigger_release_for_deal: failed for deal %s: %s",
+                deal_id, e, exc_info=True,
+            )
+            await db.rollback()
+            return 0
+
+
+async def match_all_active_deals() -> Dict[str, int]:
+    """Background scheduler task: match all active deals against all
+    eligible buyers and auto-launch campaigns.
+
+    Fetches all deals with status 'Available' or 'Campaign Launched'
+    that have embeddings. For each deal, runs ``find_top_matches_for_deal``
+    (which handles hard filters, similarity threshold, 2-deal cap, and
+    queue insertion for capped buyers). For each eligible match, calls
+    ``launch_campaign_for_buyer`` which has its own idempotency check
+    (skips if campaigns already exist for that buyer+deal).
+
+    Opens its own database session.
+
+    Returns:
+        dict with keys: deals_processed, campaigns_launched, buyers_queued.
+    """
+    import app.database as _db
+
+    async with _db.async_session_factory() as db:
+        try:
+            # Fetch all active deals with embeddings
+            result = await db.execute(
+                select(Deal).where(
+                    Deal.status.in_(("Available", "Campaign Launched")),
+                    Deal.deal_embedding.isnot(None),
+                )
+            )
+            deals = result.scalars().all()
+
+            if not deals:
+                logger.debug("Auto-match: no active deals with embeddings found")
+                return {"deals_processed": 0, "campaigns_launched": 0, "buyers_queued": 0}
+
+            total_deals = len(deals)
+            campaigns_launched = 0
+            buyers_queued = 0
+            deals_skipped = 0
+
+            for deal in deals:
+                try:
+                    # Run matching — handles hard filters, threshold, cap, queue
+                    match_result = await find_top_matches_for_deal(
+                        db, deal=deal, limit=DEFAULT_MATCH_LIMIT,
+                    )
+                    buyers_queued += match_result.queued_count
+
+                    if not match_result.matches:
+                        deals_skipped += 1
+                        continue
+
+                    # For each eligible match, try to launch campaign
+                    for buyer_match in match_result.matches:
+                        buyer = await db.get(Buyer, buyer_match.id)
+                        if not buyer:
+                            continue
+
+                        launch_result = await launch_campaign_for_buyer(
+                            db=db,
+                            buyer=buyer,
+                            deal=deal,
+                            similarity_score=float(buyer_match.similarity),
+                        )
+                        if launch_result["success"]:
+                            campaigns_launched += 1
+
+                except Exception as deal_err:
+                    logger.warning(
+                        "Auto-match: failed to process deal %s (%s): %s",
+                        deal.id, deal.address, deal_err, exc_info=True,
+                    )
+                    continue
+
+            # Commit all campaign creations
+            await db.commit()
+
+            logger.info(
+                "Auto-match complete: %d deals processed, %d campaigns "
+                "launched, %d buyers queued, %d deals had no matches",
+                total_deals, campaigns_launched, buyers_queued, deals_skipped,
+            )
+
+            return {
+                "deals_processed": total_deals,
+                "campaigns_launched": campaigns_launched,
+                "buyers_queued": buyers_queued,
+                "deals_skipped": deals_skipped,
+            }
+
+        except Exception as e:
+            logger.error("Auto-match: fatal error: %s", e, exc_info=True)
+            await db.rollback()
+            return {"deals_processed": 0, "campaigns_launched": 0, "buyers_queued": 0}
 
 
 async def invalidate_queued_matches_for_buyer(db: AsyncSession, buyer_id: UUID) -> int:

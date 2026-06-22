@@ -63,6 +63,19 @@ class Settings(BaseSettings):
     # buyer-deal match to be considered valid. Below this threshold, no match.
     match_similarity_threshold: float = 0.65
 
+    # Minimum number of verified, active, matched buyers required before a
+    # campaign can be launched for a deal. If fewer match, the launch is
+    # blocked with a structured message and an activity log entry is created.
+    min_verified_buyers_to_launch: int = 50
+
+    # Auto-match settings: background scheduler task that matches all active
+    # deals against all eligible buyers and auto-launches campaigns.
+    # Set to False to disable the auto-match job (e.g. during debugging).
+    auto_match_enabled: bool = True
+
+    # How often the auto-match job runs, in hours.
+    auto_match_interval_hours: int = 6
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
     @property
