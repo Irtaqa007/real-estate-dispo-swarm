@@ -22,6 +22,7 @@ from app.schemas import (
 from app.services.embeddings import generate_embedding
 from app.services.google_drive import upload_multiple
 from app.services.deal_dedup import check_deal_duplicate
+from app.services.matching_service import trigger_release_for_deal_async
 from app.services.zip_lookup import lookup_zip
 
 logger = logging.getLogger(__name__)
@@ -378,6 +379,7 @@ async def mark_under_contract(
 async def close_deal(
     deal_id: uuid.UUID,
     body: CloseDealRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Close a deal — mark as Sold, calculate payouts, update buyer and JV stats.
@@ -479,6 +481,15 @@ async def close_deal(
 
     await db.commit()
     await db.refresh(deal)
+
+    # FEATURE 2: Event-driven queued match release
+    # When a deal is closed (Sold), buyers' slots may free up — trigger
+    # immediate release instead of waiting for the next scheduler tick.
+    # This runs as a background task so the API response is not delayed.
+    background_tasks.add_task(
+        trigger_release_for_deal_async,
+        deal_id=deal.id,
+    )
 
     logger.info(
         "Deal %s (%s) closed at $%.2f — net_spread: $%.2f, my_payout: $%.2f, jv_payout: $%.2f",

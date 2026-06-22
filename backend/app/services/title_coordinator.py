@@ -27,6 +27,7 @@ import app.database as _db
 from app.models.schemas import ActivityLog, Deal, JVPartner
 from app.services.gmail_service import send_email
 from app.services.groq_client import groq_chat_completion
+from app.services.matching_service import trigger_release_for_deal_async
 from app.services.resilience import log_retry_attempt, record_metric
 
 logger = logging.getLogger(__name__)
@@ -320,6 +321,8 @@ async def process_title_emails(db: Optional[AsyncSession] = None) -> Dict[str, A
 
     results: List[dict] = []
     processed = 0
+    # Track deals auto-closed (Funded/Closed) to trigger queued match release
+    sold_deal_ids: List[uuid.UUID] = []
 
     try:
         # Pre-fetch all deals for address matching (address -> deal_id)
@@ -337,8 +340,22 @@ async def process_title_emails(db: Optional[AsyncSession] = None) -> Dict[str, A
             results.append(outcome)
             if outcome.get("action_taken"):
                 processed += 1
+            # Track deals auto-closed (Funded/Closed intents) for release
+            if outcome.get("intent") in ("Funded", "Closed") and outcome.get("matched_deal_id"):
+                sold_deal_ids.append(outcome["matched_deal_id"])
 
         await db.commit()
+
+        # FEATURE 2: Event-driven queued match release for auto-closed deals
+        for deal_id in sold_deal_ids:
+            try:
+                await trigger_release_for_deal_async(deal_id)
+            except Exception as release_err:
+                logger.warning(
+                    "Failed to trigger release for auto-closed deal %s: %s",
+                    deal_id, release_err, exc_info=True,
+                )
+
     finally:
         if close_session:
             await db.close()
@@ -481,6 +498,7 @@ async def _process_single_title_email(
         "subject": email_data["subject"],
         "intent": intent,
         "deal_matched": bool(matched_deal_id),
+        "matched_deal_id": matched_deal_id,
         "deal_address": matched_address,
         "action_taken": action_taken,
         "summary": classification["summary"],

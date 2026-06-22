@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import Campaign, Deal
+from app.models.schemas import Campaign, Deal, QueuedDealMatch
 from app.services.email_generator import generate_touch_email, TOUCH_CONFIGS
 from app.services.gmail_service import send_email
 from app.services.buyer_scoring import (
@@ -55,13 +55,17 @@ async def launch_campaign_for_buyer(
             - success: bool
             - touches_created: int (0 if skipped)
             - reason: str (skip reason or "ok")
-            - campaign_ids: list of created Campaign IDs
+            - campaign_ids: list of created Campaign IDs (UUID strings)
+            - touches: list of dicts with touch, subject, body, status,
+              scheduled_send_at (ISO str or None) — only populated when
+              touches were actually created
     """
     result: Dict = {
         "success": False,
         "touches_created": 0,
         "reason": "",
         "campaign_ids": [],
+        "touches": [],
     }
 
     buyer_id = buyer.id
@@ -79,6 +83,40 @@ async def launch_campaign_for_buyer(
         logger.info(
             "Skipping campaign launch for buyer %s, deal %s — campaigns already exist",
             buyer_id, deal_id,
+        )
+        return result
+
+    # ── FEATURE 3: 2-deal cap enforcement ──
+    # Even if find_top_matches_for_deal applies the cap, this check ensures
+    # that direct API calls to launch_campaign_for_buyer (or any other path)
+    # also respect the cap. If the buyer already has 2 active deals, queue
+    # this match and skip launch.
+    # Lazy import to avoid circular import (matching_service imports us).
+    from app.services.matching_service import get_active_deal_count_for_buyer
+    active_count = await get_active_deal_count_for_buyer(db, buyer_id)
+    if active_count >= 2:
+        # Insert QueuedDealMatch so the deal isn't lost
+        existing_qm = await db.execute(
+            select(QueuedDealMatch).where(
+                QueuedDealMatch.buyer_id == buyer_id,
+                QueuedDealMatch.deal_id == deal_id,
+                QueuedDealMatch.status == "waiting",
+            )
+        )
+        if not existing_qm.scalar_one_or_none():
+            now = datetime.now(timezone.utc)
+            db.add(QueuedDealMatch(
+                buyer_id=buyer_id,
+                deal_id=deal_id,
+                status="waiting",
+                similarity_score=similarity_score,
+                queued_at=now,
+            ))
+        result["reason"] = "buyer_at_deal_cap"
+        logger.info(
+            "Skipping campaign launch for buyer %s (%s), deal %s — "
+            "buyer already at %d active deals (cap: 2). Queued match.",
+            buyer_id, buyer.email, deal_id, active_count,
         )
         return result
 
@@ -132,6 +170,15 @@ async def launch_campaign_for_buyer(
             baths=deal.baths,
             sqft=deal.sqft,
             buyer_id=buyer_id,
+            # FEATURE 4: Pass buyer intelligence fields
+            deals_closed=buyer.deals_closed or 0,
+            last_reply_at=buyer.last_reply_at,
+            engagement_score=buyer.engagement_score or 0,
+            portfolio_insights=buyer.portfolio_insights,
+            avg_spread_closed=float(buyer.avg_spread_closed) if buyer.avg_spread_closed else None,
+            price_min=float(buyer.price_min) if buyer.price_min else None,
+            price_max=float(buyer.price_max) if buyer.price_max else None,
+            pref_cities=buyer.pref_cities,
         )
 
         # ── Staggered scheduling by tier ──
@@ -188,6 +235,13 @@ async def launch_campaign_for_buyer(
 
         touch_records.append(campaign_record)
         result["campaign_ids"].append(str(campaign_record.id))
+        result["touches"].append({
+            "touch": touch_num,
+            "subject": email_data.get("subject", ""),
+            "body": email_data.get("body", ""),
+            "status": touch_status,
+            "scheduled_send_at": scheduled_send.isoformat() if scheduled_send else None,
+        })
 
     db.add_all(touch_records)
 
