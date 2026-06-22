@@ -7,6 +7,7 @@ Run daily by the scheduler. Monitors available deals and escalates based on age:
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 
@@ -14,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import ActivityLog, Deal
+from app.services.matching_service import trigger_release_for_deal_async
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,21 @@ async def run_aging_monitor(db: AsyncSession) -> List[Dict]:
     if actions_taken:
         await db.commit()
         logger.info("Aging monitor: %d actions taken", len(actions_taken))
+
+        # FEATURE 2: Event-driven queued match release
+        # After deals are moved to Dead, trigger immediate release of
+        # queued matches for affected buyers instead of waiting for
+        # the next scheduler tick.
+        for action in actions_taken:
+            if action.get("action") == "moved_to_dead":
+                try:
+                    deal_id = uuid.UUID(action["deal_id"])
+                    await trigger_release_for_deal_async(deal_id)
+                except Exception as release_err:
+                    logger.warning(
+                        "Failed to trigger release for aged-out deal %s: %s",
+                        action.get("deal_id"), release_err, exc_info=True,
+                    )
 
     return actions_taken
 
