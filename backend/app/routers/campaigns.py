@@ -680,13 +680,18 @@ async def launch_campaign(
     # FEATURE 1: 50 Verified Buyer Minimum Gate
     # If fewer than the configured minimum verified matched buyers are
     # available, block the launch and alert via activity log.
-    verified_count = len(final_pairs)
+    # Count verified buyers BEFORE fatigue filtering — fatigue is a sending
+    # delay, not a disqualification. Only hard-fail buyers (failed filters,
+    # at 2-deal cap) are excluded from this threshold.
+    verified_count = len(eligible_pairs)
     if verified_count < settings.min_verified_buyers_to_launch:
         logger.warning(
-            "Campaign launch blocked for deal %s (%s): only %d verified "
-            "matched buyers (need %d)",
+            "Campaign launch blocked for deal %s (%s): only %d eligible verified "
+            "matched buyers (need %d) — %d in fatigue cooldown (excluded from "
+            "threshold)",
             deal_id, deal.address, verified_count,
             settings.min_verified_buyers_to_launch,
+            len(fatigue_skipped),
         )
         # Log to activity log so it surfaces on the dashboard
         await audit.log(
@@ -696,7 +701,8 @@ async def launch_campaign(
             action="campaign_launch_blocked",
             metadata={
                 "reason": "insufficient_verified_buyers",
-                "verified_matched": verified_count,
+                "eligible_verified_matched": verified_count,
+                "fatigue_skipped": len(fatigue_skipped),
                 "required": settings.min_verified_buyers_to_launch,
                 "deal_address": deal.address,
                 "deal_id": str(deal_id),
@@ -710,11 +716,13 @@ async def launch_campaign(
             content={
                 "launched": False,
                 "reason": "insufficient_verified_buyers",
-                "verified_matched": verified_count,
+                "eligible_verified_matched": verified_count,
+                "fatigue_skipped": len(fatigue_skipped),
                 "required": settings.min_verified_buyers_to_launch,
                 "message": (
                     f"Add more buyers matching this deal before pitching. "
-                    f"Currently {verified_count} verified buyers match."
+                    f"Currently {verified_count} eligible verified buyers match "
+                    f"(threshold excludes {len(fatigue_skipped)} in fatigue cooldown)."
                 ),
             },
         )

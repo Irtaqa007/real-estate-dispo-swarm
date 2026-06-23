@@ -216,11 +216,34 @@ def _build_prompt(
                 f"Engagement score: {engagement_score:.0f}/100 — low activity, needs convincing."
             )
     if avg_spread_closed is not None and avg_spread_closed > 0:
-        asking_or_above = "above" if asking_price >= avg_spread_closed else "below"
-        intelligence_lines.append(
-            f"Buyer's typical deal size: ${avg_spread_closed:,.0f} — this deal is "
-            f"{asking_or_above} their average spread."
-        )
+        if spread > 0:
+            pct_diff = ((spread - avg_spread_closed) /
+                        avg_spread_closed) * 100
+            if pct_diff >= 10:
+                comparison = (
+                    f"above their typical deal ({pct_diff:.0f}% "
+                    f"higher than their avg ${avg_spread_closed:,.0f})"
+                )
+            elif pct_diff <= -10:
+                comparison = (
+                    f"below their typical deal ({abs(pct_diff):.0f}% "
+                    f"lower than their avg ${avg_spread_closed:,.0f})"
+                )
+            else:
+                comparison = (
+                    f"right in line with their typical "
+                    f"${avg_spread_closed:,.0f} avg deal"
+                )
+            intelligence_lines.append(
+                f"This deal's spread (${spread:,.0f}) is {comparison} "
+                f"— calibrate pitch accordingly."
+            )
+        else:
+            # spread not available, just note their typical size
+            intelligence_lines.append(
+                f"Buyer typically closes deals with ~${avg_spread_closed:,.0f} "
+                f"spread — reference their experience level naturally."
+            )
     if pref_cities:
         cities_str = ", ".join(str(c) for c in pref_cities if c)
         if cities_str:

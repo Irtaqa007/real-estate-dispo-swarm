@@ -549,15 +549,19 @@ async def match_all_active_deals() -> Dict[str, int]:
                         if launch_result["success"]:
                             campaigns_launched += 1
 
+                    # Commit this deal's campaigns independently before
+                    # moving to the next deal. Ensures partial staged
+                    # rows from a failed deal are never committed.
+                    await db.commit()
+
                 except Exception as deal_err:
+                    # Roll back any partial staged rows for this deal
+                    await db.rollback()
                     logger.warning(
                         "Auto-match: failed to process deal %s (%s): %s",
                         deal.id, deal.address, deal_err, exc_info=True,
                     )
                     continue
-
-            # Commit all campaign creations
-            await db.commit()
 
             logger.info(
                 "Auto-match complete: %d deals processed, %d campaigns "

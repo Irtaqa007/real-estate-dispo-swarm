@@ -180,9 +180,10 @@ class TestFiftyBuyerGate:
         content = json.loads(response.body)
         assert content["launched"] is False
         assert content["reason"] == "insufficient_verified_buyers"
-        assert content["verified_matched"] == 40
+        assert content["eligible_verified_matched"] == 40
+        assert content["fatigue_skipped"] == 0
         assert content["required"] == 50
-        assert "40 verified buyers" in content["message"]
+        assert "40 eligible verified buyers" in content["message"]
 
         # Verify ActivityLog was created
         mock_audit.log.assert_awaited_once()
@@ -191,7 +192,8 @@ class TestFiftyBuyerGate:
         assert log_call["entity_id"] == deal_id
         assert log_call["action"] == "campaign_launch_blocked"
         assert log_call["metadata"]["reason"] == "insufficient_verified_buyers"
-        assert log_call["metadata"]["verified_matched"] == 40
+        assert log_call["metadata"]["eligible_verified_matched"] == 40
+        assert log_call["metadata"]["fatigue_skipped"] == 0
         assert log_call["metadata"]["required"] == 50
         assert log_call["metadata"]["alert_user"] is True
 
@@ -394,7 +396,8 @@ class TestFiftyBuyerGate:
         content = json.loads(response.body)
         assert content["launched"] is False
         assert content["reason"] == "insufficient_verified_buyers"
-        assert content["verified_matched"] == 30
+        assert content["eligible_verified_matched"] == 30
+        assert content["fatigue_skipped"] == 0
         assert content["required"] == 50
 
     @pytest.mark.asyncio
@@ -452,7 +455,8 @@ class TestFiftyBuyerGate:
         assert response.status_code == 200
         content = json.loads(response.body)
         assert content["launched"] is False
-        assert content["verified_matched"] == 5
+        assert content["eligible_verified_matched"] == 5
+        assert content["fatigue_skipped"] == 0
         assert content["required"] == 10
 
     @pytest.mark.asyncio
@@ -510,5 +514,6 @@ class TestFiftyBuyerGate:
         assert response.status_code == 200
         content = json.loads(response.body)
         assert content["launched"] is False
-        assert content["verified_matched"] == 49
+        assert content["eligible_verified_matched"] == 49
+        assert content["fatigue_skipped"] == 0
         assert content["required"] == 50
