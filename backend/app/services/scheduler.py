@@ -28,10 +28,14 @@ from app.services.buyer_scoring import run_tier_promotions, reset_pitch_counters
 from app.services.aging_monitor import run_aging_monitor
 from app.services.buyer_insights import update_all_buyer_insights
 from app.services.embeddings import generate_embedding
-from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message
+from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold
 from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
-from app.services.state_persistence import save_all_state
+from app.services.state_persistence import (
+    save_all_state,
+    load_gmail_daily_sends,
+    save_gmail_daily_sends,
+)
 from app.services.circuit_breaker import gmail_circuit_breaker, get_cb_queue
 from app.services.matching_service import process_queued_matches, invalidate_queued_matches_for_buyer, match_all_active_deals
 from app.services.resilience import get_metrics, get_idempotency_store
@@ -178,12 +182,19 @@ async def process_scheduled_campaigns() -> int:
                         db.add(campaign)
                         continue
 
-                    await send_email(
+                    result = await send_email(
                         to=buyer.email,
                         subject=campaign.subject,
                         body=campaign.body,
                         campaign_id=campaign.id.hex,
+                        send_type="campaign",
                     )
+                    if result.get("status") == "deferred_cap":
+                        logger.info(
+                            "Scheduler: campaign %s (touch %d) deferred — daily cap reached",
+                            campaign.id, campaign.touch_number,
+                        )
+                        continue
 
                     # 7. Update campaign status
                     campaign.status = "Sent"
@@ -493,13 +504,40 @@ async def process_buyer_replies() -> int:
 
                     # 10b. Auto-Follow-Up on Question replies
                     if reply_intent == "Question":
+                        # ── FEATURE 2: Uncertainty detection — graceful hold if AI can't answer ──
+                        hold_response = await detect_uncertainty_and_hold(
+                            reply=reply,
+                            classification=classification,
+                            db_session=db,
+                            buyer_id=buyer_id,
+                            deal_id=campaign.deal_id,
+                        )
+                        if hold_response:
+                            question_answer = hold_response
+                            try:
+                                await audit.log(
+                                    db,
+                                    entity_type="campaign",
+                                    entity_id=campaign.id,
+                                    action="uncertainty_hold_sent",
+                                    metadata={
+                                        "hold_response": hold_response[:200],
+                                        "buyer_id": str(buyer_id),
+                                        "deal_id": str(campaign.deal_id),
+                                        "source": "scheduler",
+                                    },
+                                )
+                            except Exception as hold_err:
+                                logger.warning("Scheduler: failed to log hold response: %s", hold_err, exc_info=True)
+                        else:
+                            question_answer = classification.get("question_answer")
+
                         current_round = campaign.question_round or 0
                         new_round = current_round + 1
                         campaign.question_round = new_round
                         db.add(campaign)
 
                         round_action = get_question_round_message(new_round)
-                        question_answer = classification.get("question_answer")
 
                         if round_action == "auto_answer" and question_answer:
                             logger.info(
@@ -799,6 +837,31 @@ async def _scheduler_loop() -> None:
                             )
                 except Exception as e:
                     logger.error("Scheduler: pitch counter reset failed: %s", e, exc_info=True)
+
+            if not _running:
+                break
+
+            # ── FEATURE 1: Gmail daily send counter midnight reset ──
+            # Runs on every scheduler cycle (not gated by UTC is_new_day) because
+            # the configured timezone midnight may not align with UTC midnight.
+            try:
+                from zoneinfo import ZoneInfo
+                from datetime import timedelta
+                now_tz = datetime.now(ZoneInfo(settings.gmail_timezone))
+                counter = await load_gmail_daily_sends()
+                counter_date = counter.get("date", "")
+                today_tz = now_tz.strftime("%Y-%m-%d")
+                if counter_date and counter_date != today_tz:
+                    # Date changed in configured timezone — reset counter
+                    yesterday_count = counter.get("count", 0)
+                    next_midnight = now_tz.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                    await save_gmail_daily_sends(0, today_tz, next_midnight.isoformat())
+                    logger.info(
+                        "Gmail daily counter reset. Yesterday: %d sends.",
+                        yesterday_count,
+                    )
+            except Exception as e:
+                logger.error("Scheduler: gmail daily counter reset failed: %s", e, exc_info=True)
 
             if not _running:
                 break

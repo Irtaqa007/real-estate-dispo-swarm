@@ -25,6 +25,7 @@ from app.services.embeddings import check_cohere_health
 from app.services.groq_client import get_rate_limit_status
 from app.services.resilience import get_resilience_health
 from app.services.scheduler import is_scheduler_running
+from app.services.state_persistence import get_gmail_send_status
 
 router = APIRouter(tags=["health"])
 
@@ -167,3 +168,17 @@ async def health_check(db: AsyncSession = Depends(get_db)):
             "idempotency_store_size": resilience["idempotency_store_size"],
         },
     }
+
+
+@router.get("/api/sending/status")
+async def sending_status():
+    """Get the current Gmail send quota status for the dashboard widget.
+
+    Returns a snapshot of today's sends vs daily cap. Fast — single DB read
+    from app_state only, no external calls.
+
+    Returns:
+        dict: sends_today, daily_cap, remaining, percent_used,
+              cap_hit, warning_threshold_hit, resets_at.
+    """
+    return await get_gmail_send_status()

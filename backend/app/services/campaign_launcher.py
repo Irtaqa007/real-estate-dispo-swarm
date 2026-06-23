@@ -223,6 +223,7 @@ async def launch_campaign_for_buyer(
                     subject=email_data.get("subject", ""),
                     body=email_data.get("body", ""),
                     campaign_id=campaign_record.id.hex,
+                    send_type="campaign",
                 )
                 campaign_record.sent_at = datetime.now(timezone.utc)
                 await increment_pitch_count(db, buyer)

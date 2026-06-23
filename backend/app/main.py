@@ -120,13 +120,18 @@ async def _restore_persisted_state() -> None:
         if groq_state and "count" in groq_state:
             restore_daily_counter(groq_state["count"], groq_state["date"])
 
+        # 5. Gmail daily send counter — just log, persists via DB
+        gmail_sends = state.get("gmail_daily_sends", {})
+        gmail_send_info = f"{gmail_sends.get('count', 0)} on {gmail_sends.get('date', 'N/A')}" if gmail_sends else "N/A"
+
         logger.info(
             "Persisted state restored: %d CB queue items, %d metrics, %d idem entries, "
-            "Groq daily=%s",
+            "Groq daily=%s, Gmail sends=%s",
             len(cb_queue),
             len(metrics),
             len(idem_store),
             groq_state.get("count", "N/A"),
+            gmail_send_info,
         )
     except Exception as e:
         logger.warning(

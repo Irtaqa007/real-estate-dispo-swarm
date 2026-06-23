@@ -29,7 +29,7 @@ from app.services.campaign_launcher import launch_campaign_for_buyer
 from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
 from app.services.dead_letter_queue import move_to_dlq
-from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message
+from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold
 from app.services.title_coordinator import send_assignment_contract
 from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection
 from app.services.buyer_merge import merge_buy_boxes
@@ -337,13 +337,41 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
         # 10c. Auto-Follow-Up on "Question" replies (feature 5):
         # Draft answer via AI, track question_round, escalate if > 3 rounds
         if classification["reply_intent"] == "Question":
+            # ── FEATURE 2: Uncertainty detection — graceful hold if AI can't answer ──
+            hold_response = await detect_uncertainty_and_hold(
+                reply=reply,
+                classification=classification,
+                db_session=db,
+                buyer_id=buyer_id,
+                deal_id=campaign.deal_id,
+            )
+            if hold_response:
+                # Use holding response instead of AI draft
+                question_answer = hold_response
+                # Still log that a hold was sent
+                try:
+                    await audit.log(
+                        db,
+                        entity_type="campaign",
+                        entity_id=campaign.id,
+                        action="uncertainty_hold_sent",
+                        metadata={
+                            "hold_response": hold_response[:200],
+                            "buyer_id": str(buyer_id),
+                            "deal_id": str(campaign.deal_id),
+                        },
+                    )
+                except Exception as hold_err:
+                    logger.warning("Failed to log hold response: %s", hold_err, exc_info=True)
+            else:
+                question_answer = classification.get("question_answer")
+
             current_round = campaign.question_round or 0
             new_round = current_round + 1
             campaign.question_round = new_round
             db.add(campaign)
 
             round_action = get_question_round_message(new_round)
-            question_answer = classification.get("question_answer")
 
             if round_action == "auto_answer" and question_answer:
                 logger.info(
@@ -680,13 +708,18 @@ async def launch_campaign(
     # FEATURE 1: 50 Verified Buyer Minimum Gate
     # If fewer than the configured minimum verified matched buyers are
     # available, block the launch and alert via activity log.
-    verified_count = len(final_pairs)
+    # Count verified buyers BEFORE fatigue filtering — fatigue is a sending
+    # delay, not a disqualification. Only hard-fail buyers (failed filters,
+    # at 2-deal cap) are excluded from this threshold.
+    verified_count = len(eligible_pairs)
     if verified_count < settings.min_verified_buyers_to_launch:
         logger.warning(
-            "Campaign launch blocked for deal %s (%s): only %d verified "
-            "matched buyers (need %d)",
+            "Campaign launch blocked for deal %s (%s): only %d eligible verified "
+            "matched buyers (need %d) — %d in fatigue cooldown (excluded from "
+            "threshold)",
             deal_id, deal.address, verified_count,
             settings.min_verified_buyers_to_launch,
+            len(fatigue_skipped),
         )
         # Log to activity log so it surfaces on the dashboard
         await audit.log(
@@ -696,7 +729,8 @@ async def launch_campaign(
             action="campaign_launch_blocked",
             metadata={
                 "reason": "insufficient_verified_buyers",
-                "verified_matched": verified_count,
+                "eligible_verified_matched": verified_count,
+                "fatigue_skipped": len(fatigue_skipped),
                 "required": settings.min_verified_buyers_to_launch,
                 "deal_address": deal.address,
                 "deal_id": str(deal_id),
@@ -710,11 +744,13 @@ async def launch_campaign(
             content={
                 "launched": False,
                 "reason": "insufficient_verified_buyers",
-                "verified_matched": verified_count,
+                "eligible_verified_matched": verified_count,
+                "fatigue_skipped": len(fatigue_skipped),
                 "required": settings.min_verified_buyers_to_launch,
                 "message": (
                     f"Add more buyers matching this deal before pitching. "
-                    f"Currently {verified_count} verified buyers match."
+                    f"Currently {verified_count} eligible verified buyers match "
+                    f"(threshold excludes {len(fatigue_skipped)} in fatigue cooldown)."
                 ),
             },
         )
@@ -860,7 +896,22 @@ async def send_campaign_email(
             subject=campaign.subject,
             body=campaign.body,
             campaign_id=campaign.id.hex,
+            send_type="campaign",
         )
+
+        if send_result.get("status") == "deferred_cap":
+            logger.info(
+                "Campaign %s (touch %d) deferred — daily cap reached",
+                campaign_id, campaign.touch_number,
+            )
+            return SendResponse(
+                campaign_id=campaign_id,
+                to_email=buyer.email,
+                subject=campaign.subject,
+                message_id="",
+                status="deferred_cap",
+                sent_at="",
+            )
 
         # Update campaign status
         campaign.status = "Sent"
@@ -962,7 +1013,19 @@ async def send_all_campaigns(
                 subject=campaign.subject or "",
                 body=campaign.body or "",
                 campaign_id=campaign.id.hex,
+                send_type="campaign",
             )
+
+            if send_result.get("status") == "deferred_cap":
+                items.append(SendAllItem(
+                    campaign_id=campaign.id,
+                    touch_number=campaign.touch_number,
+                    to_email=buyer.email,
+                    status="deferred_cap",
+                    error="Daily send cap reached",
+                ))
+                sent_count += 1  # Count as handled, not failed
+                continue
 
             campaign.status = "Sent"
             campaign.sent_at = datetime.now(timezone.utc)

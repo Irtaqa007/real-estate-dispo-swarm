@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 
 import app.database as _db
+from app.config import settings
 from app.models.schemas import AppState
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ KEY_CIRCUIT_BREAKER_QUEUE = "circuit_breaker_queue"
 KEY_METRICS = "metrics"
 KEY_IDEMPOTENCY_STORE = "idempotency_store"
 KEY_GROQ_DAILY_COUNTER = "groq_daily_counter"
+KEY_GMAIL_DAILY_SENDS = "gmail_daily_sends"
 
 # ---------------------------------------------------------------------------
 # Generic helpers — single-key ops still open their own session
@@ -256,6 +258,101 @@ async def save_groq_daily_counter(count: int, date_str: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Gmail daily sends counter
+# ---------------------------------------------------------------------------
+
+
+async def load_gmail_daily_sends() -> Dict[str, Any]:
+    """Load the Gmail daily send counter from the DB.
+
+    Returns:
+        Dict with keys: date (str YYYY-MM-DD), count (int), reset_at (str), or empty dict.
+    """
+    raw = await _get_state(KEY_GMAIL_DAILY_SENDS)
+    if not raw or not isinstance(raw, dict):
+        return {}
+    return {
+        "date": str(raw.get("date", "")),
+        "count": int(raw.get("count", 0)),
+        "reset_at": str(raw.get("reset_at", "")),
+    }
+
+
+async def save_gmail_daily_sends(count: int, date_str: str, reset_at: str) -> None:
+    """Save the Gmail daily send counter to the DB.
+
+    Args:
+        count: Number of campaign sends today.
+        date_str: Today's date as YYYY-MM-DD.
+        reset_at: ISO-formatted next midnight in configured timezone.
+    """
+    await _set_state(KEY_GMAIL_DAILY_SENDS, {
+        "date": date_str,
+        "count": count,
+        "reset_at": reset_at,
+    })
+    logger.debug("Persisted Gmail daily sends: %d on %s (resets at %s)", count, date_str, reset_at)
+
+
+async def increment_gmail_send_count() -> int:
+    """Increment the Gmail daily send counter by 1 and persist.
+
+    Opens its own DB session. Returns the new count.
+    Called after every successful send_email() with send_type="campaign".
+
+    Returns:
+        The updated count for today.
+    """
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timedelta
+
+    now = datetime.now(ZoneInfo(settings.gmail_timezone))
+    today_str = now.strftime("%Y-%m-%d")
+    next_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    reset_at_str = next_midnight.isoformat()
+
+    raw = await load_gmail_daily_sends()
+    current_date = raw.get("date", "")
+    current_count = raw.get("count", 0)
+
+    if current_date != today_str:
+        # New day — reset counter
+        new_count = 1
+    else:
+        new_count = current_count + 1
+
+    await save_gmail_daily_sends(new_count, today_str, reset_at_str)
+    return new_count
+
+
+async def get_gmail_send_status() -> Dict[str, Any]:
+    """Get the current Gmail send status for the dashboard widget.
+
+    Returns:
+        dict with: sends_today, daily_cap, remaining, percent_used,
+        cap_hit, warning_threshold_hit, resets_at.
+    """
+    raw = await load_gmail_daily_sends()
+    sends_today = raw.get("count", 0)
+    reset_at = raw.get("reset_at", "")
+    daily_cap = settings.gmail_daily_cap
+    remaining = max(0, daily_cap - sends_today)
+    percent_used = (sends_today / daily_cap * 100) if daily_cap > 0 else 0.0
+    cap_hit = sends_today >= daily_cap
+    warning_threshold_hit = percent_used >= 90
+
+    return {
+        "sends_today": sends_today,
+        "daily_cap": daily_cap,
+        "remaining": remaining,
+        "percent_used": round(percent_used, 2),
+        "cap_hit": cap_hit,
+        "warning_threshold_hit": warning_threshold_hit,
+        "resets_at": reset_at,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Bulk load / save (for startup and periodic sync)
 # ---------------------------------------------------------------------------
 
@@ -267,13 +364,14 @@ async def load_all_state() -> Dict[str, Any]:
 
     Returns:
         Dict with keys: circuit_breaker_queue, metrics, idempotency_store,
-        groq_daily_counter.
+        groq_daily_counter, gmail_daily_sends.
     """
     return {
         KEY_CIRCUIT_BREAKER_QUEUE: await load_circuit_breaker_queue(),
         KEY_METRICS: await load_metrics(),
         KEY_IDEMPOTENCY_STORE: await load_idempotency_store(),
         KEY_GROQ_DAILY_COUNTER: await load_groq_daily_counter(),
+        KEY_GMAIL_DAILY_SENDS: await load_gmail_daily_sends(),
     }
 
 
@@ -332,12 +430,19 @@ async def save_all_state(
             else:
                 idem_serializable[k] = {"result": str(v), "created_at": 0}
 
-        # Batch upsert all four keys in a single session
+        # Load current gmail daily sends for persistence
+        try:
+            gmail_sends = await load_gmail_daily_sends()
+        except Exception:
+            gmail_sends = {}
+
+        # Batch upsert all keys in a single session
         await _set_states_batch({
             KEY_CIRCUIT_BREAKER_QUEUE: cb_sanitized,
             KEY_METRICS: metrics_serializable,
             KEY_IDEMPOTENCY_STORE: idem_serializable,
             KEY_GROQ_DAILY_COUNTER: {"count": groq_count, "date": groq_date},
+            KEY_GMAIL_DAILY_SENDS: gmail_sends,
         })
 
         logger.debug(

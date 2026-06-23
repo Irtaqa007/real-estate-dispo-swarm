@@ -132,6 +132,7 @@ async def retry_failed_campaign(
             subject=campaign.subject,
             body=campaign.body,
             campaign_id=campaign.id.hex,
+            send_type="campaign",
         )
 
         # Mark as resolved

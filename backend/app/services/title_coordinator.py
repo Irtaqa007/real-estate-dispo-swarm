@@ -563,6 +563,7 @@ async def send_assignment_contract(
             to=buyer_email,
             subject=subject,
             body=body,
+            send_type="reply",
         )
 
         logger.info(

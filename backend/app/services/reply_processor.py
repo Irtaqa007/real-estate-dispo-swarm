@@ -11,8 +11,11 @@ Returns structured intent with: primary_intent, urgency, sentiment, topics, reco
 
 import json
 import logging
+import uuid
 from typing import Any, Dict, Optional
 
+from app.config import settings
+from app.services.audit_logger import audit
 from app.services.groq_client import groq_chat_completion
 
 logger = logging.getLogger(__name__)
@@ -23,7 +26,15 @@ logger = logging.getLogger(__name__)
 
 _CLASSIFICATION_SYSTEM_PROMPT = (
     "You are a wholesale real estate expert and negotiator. "
-    "Analyze this buyer reply email and extract structured data."
+    "Analyze this buyer reply email and extract structured data.\n"
+    f"OPERATOR IDENTITY (you respond as this person):\n"
+    f"Name: {settings.operator_name}\n"
+    f"Sign-off: {settings.operator_email_signature}\n"
+    f"Tone: {settings.operator_tone}\n"
+    f"Never use: {settings.operator_never_say}\n"
+    f"{settings.operator_context}\n"
+    f"IMPORTANT: Reply in first person as {settings.operator_name}. "
+    f"Do not reveal you are AI or automated."
 )
 
 _CLASSIFICATION_USER_PROMPT_TEMPLATE = """REPLY EMAIL:
@@ -293,3 +304,82 @@ def get_question_round_message(question_round: int) -> str:
         return "final_answer_prompt"
     else:
         return "manual_intervention_needed"
+
+
+# ---------------------------------------------------------------------------
+# Uncertainty Detection & Graceful Hold (Feature 2 - Part D)
+# ---------------------------------------------------------------------------
+
+
+async def detect_uncertainty_and_hold(
+    reply: dict,
+    classification: dict,
+    db_session,
+    buyer_id,
+    deal_id,
+) -> Optional[str]:
+    """Check if a buyer's question can be answered confidently from available data.
+
+    If the question cannot be answered from the deal record, buyer profile, or
+    existing thread context, generates a graceful holding response instead of
+    guessing, and flags for manual follow-up via audit log.
+
+    Args:
+        reply: The raw reply dict with subject, body, from_email.
+        classification: The classification dict from process_reply().
+        db_session: Database session for audit logging.
+        buyer_id: UUID of the buyer.
+        deal_id: UUID of the deal.
+
+    Returns:
+        str or None: The holding response text if uncertainty detected, else None.
+    """
+    if classification.get("reply_intent") != "Question":
+        return None
+
+    question_answer = classification.get("question_answer")
+    
+    # If the AI already provided a substantive answer (more than 20 chars), 
+    # assume confidence and let it through
+    if question_answer and len(question_answer) > 20:
+        return None
+
+    # Generate appropriate holding response
+    import random
+    holding_responses = [
+        "Let me pull that up and get back to you shortly.",
+        "Good question — let me double check that and come back to you today.",
+        "I want to make sure I give you the right number on that — give me a few hours.",
+        "Let me look into that and follow up with the details shortly.",
+    ]
+    holding_text = random.choice(holding_responses)
+    
+    # Sign-off
+    sign_off = settings.operator_email_signature.strip()
+    if sign_off:
+        holding_text += "\n\n" + sign_off
+
+    # Log uncertainty flag to activity log
+    try:
+        await audit.log(
+            db_session,
+            entity_type="campaign",
+            entity_id=uuid.uuid4(),
+            action="uncertainty_flag",
+            metadata={
+                "buyer_id": str(buyer_id),
+                "deal_id": str(deal_id),
+                "question_asked": reply.get("body", "")[:500],
+                "response_sent": holding_text,
+                "alert_user": True,
+                "action_required": "Answer buyer's question manually and follow up",
+            },
+        )
+    except Exception as e:
+        logger.warning("Failed to log uncertainty flag: %s", e, exc_info=True)
+
+    logger.info(
+        "Uncertainty detected for buyer %s — generated holding response",
+        buyer_id,
+    )
+    return holding_text

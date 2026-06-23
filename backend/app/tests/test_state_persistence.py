@@ -110,8 +110,8 @@ async def test_set_states_batch_empty_entries_does_nothing(mock_session_factory)
 
 
 @pytest.mark.asyncio
-async def test_save_all_state_batches_all_four_keys(mock_session_factory):
-    """save_all_state should call _set_states_batch with all 4 keys."""
+async def test_save_all_state_batches_all_five_keys(mock_session_factory):
+    """save_all_state should call _set_states_batch with all 5 keys."""
     mock_factory, mock_db = mock_session_factory
 
     cb_queue = [{"campaign_id": "c1", "to_email": "a@b.com", "subject": "Hello"}]
@@ -128,9 +128,10 @@ async def test_save_all_state_batches_all_four_keys(mock_session_factory):
         groq_date=groq_date,
     )
 
-    # _set_states_batch should have been called with 4 keys
+    # _set_states_batch should have been called with 5 keys
+    # (circuit_breaker_queue, metrics, idempotency_store, groq_daily_counter, gmail_daily_sends)
     # We can check by looking at db.add calls (each key creates a new AppState row)
-    assert mock_db.add.call_count == 4
+    assert mock_db.add.call_count == 5
     mock_db.commit.assert_awaited_once()
 
 

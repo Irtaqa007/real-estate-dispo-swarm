@@ -68,6 +68,22 @@ class Settings(BaseSettings):
     # blocked with a structured message and an activity log entry is created.
     min_verified_buyers_to_launch: int = 50
 
+    # Gmail daily send cap — hard ceiling before Gmail's ~500/day limit.
+    # Campaign sends (send_type="campaign") are blocked when count reaches cap.
+    # Reply sends (send_type="reply") are never blocked.
+    gmail_daily_cap: int = 400
+
+    # Timezone for midnight reset of the daily send counter.
+    gmail_timezone: str = "Asia/Karachi"
+
+    # Operator Identity — the AI speaks as this person in all communications.
+    operator_name: str = "Alex"
+    operator_first_name: str = "Alex"
+    operator_email_signature: str = "Best,\nAlex"
+    operator_tone: str = "conversational"
+    operator_never_say: str = ""
+    operator_context: str = ""
+
     # Auto-match settings: background scheduler task that matches all active
     # deals against all eligible buyers and auto-launches campaigns.
     # Set to False to disable the auto-match job (e.g. during debugging).

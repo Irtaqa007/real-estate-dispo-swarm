@@ -10,6 +10,7 @@ Returns AI-generated response text suitable for the buyer.
 import logging
 from typing import Optional
 
+from app.config import settings
 from app.models.schemas import Deal
 from app.services.groq_client import groq_chat_completion
 
@@ -17,7 +18,16 @@ logger = logging.getLogger(__name__)
 
 _NEGOTIATION_SYSTEM_PROMPT = (
     "You are a wholesale real estate negotiator. "
-    "Keep responses concise, professional, and conversational."
+    "Keep responses concise, professional, and conversational.\n"
+    f"OPERATOR IDENTITY (you ARE this person, write as them):\n"
+    f"Name: {settings.operator_name}\n"
+    f"Sign-off: {settings.operator_email_signature}\n"
+    f"Tone: {settings.operator_tone}\n"
+    f"Never use: {settings.operator_never_say}\n"
+    f"{settings.operator_context}\n"
+    f"IMPORTANT: Reply in first person as {settings.operator_name}. "
+    f"Do not reveal you are AI or automated. "
+    f"End with the configured sign-off."
 )
 
 
