@@ -29,7 +29,7 @@ from app.services.campaign_launcher import launch_campaign_for_buyer
 from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
 from app.services.dead_letter_queue import move_to_dlq
-from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold
+from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold, match_reply_to_campaign
 from app.services.title_coordinator import send_assignment_contract
 from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection
 from app.services.buyer_merge import merge_buy_boxes
@@ -137,12 +137,8 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
             ))
             continue
 
-        # 4. Match to the most recent Sent campaign for this buyer
-        campaign = await db.scalar(
-            select(Campaign)
-            .where(Campaign.buyer_id == buyer_id, Campaign.status == "Sent")
-            .order_by(Campaign.sent_at.desc().nullslast())
-        )
+        # 4. Match reply to the correct campaign (thread-aware priority chain)
+        campaign, confidence_level = await match_reply_to_campaign(db, buyer_id, reply)
 
         if not campaign:
             # Classify anyway for logging, but skip further processing
@@ -157,6 +153,12 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
             ))
             continue
 
+        # Log the match method used
+        logger.info(
+            "Reply from buyer %s matched to campaign %s via %s (deal: %s)",
+            buyer_id, campaign.id, confidence_level, campaign.deal_id,
+        )
+
         # 5. Classify the reply via Groq (ghost recovery cancelled inside if needed)
         classification = await process_reply(
             reply,
@@ -164,6 +166,10 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
             buyer_id=buyer_id,
             deal_id=campaign.deal_id,
         )
+
+        # Set match_confidence on fallback matches
+        if confidence_level == "fallback":
+            classification["match_confidence"] = "low"
 
         # 6. Update the campaign with reply data
         campaign.reply_received_at = datetime.now(timezone.utc)

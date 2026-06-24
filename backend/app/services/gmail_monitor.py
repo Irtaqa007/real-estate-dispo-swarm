@@ -81,9 +81,12 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
                 continue
 
             message_id = (msg.get("Message-ID", "") or "").strip()
+            # Extract raw In-Reply-To and References for thread-aware matching
+            in_reply_to_raw = (msg.get("In-Reply-To", "") or "").strip()
+            references_raw = (msg.get("References", "") or "").strip()
             # Use References or In-Reply-To as thread_id (fallback to Message-ID)
             thread_id = (
-                (msg.get("References", "") or msg.get("In-Reply-To", "") or message_id)
+                (references_raw or in_reply_to_raw or message_id)
                 .strip()
             )
             subject = _decode_header_value(msg.get("Subject", "No Subject"))
@@ -103,6 +106,10 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
                 "subject": subject,
                 "body": body,
                 "received_at": received_at,
+                "headers": {
+                    "In-Reply-To": in_reply_to_raw,
+                    "References": references_raw,
+                },
             })
 
             # Mark as read after processing

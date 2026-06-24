@@ -217,7 +217,7 @@ async def send_email(
 
     # Acquire concurrency slot (released after _send completes)
     async with _email_semaphore:
-        result = await _send_email_inner(to, subject, body, from_email)
+        result = await _send_email_inner(to, subject, body, from_email, campaign_id)
 
     # Increment daily counter on successful campaign sends
     if send_type == "campaign" and result.get("status") == "sent":
@@ -235,6 +235,7 @@ async def _send_email_inner(
     subject: str,
     body: str,
     from_email: Optional[str] = None,
+    campaign_id: Optional[str] = None,
 ) -> dict:
     """Inner send function that runs under the concurrency semaphore.
 
@@ -258,6 +259,10 @@ async def _send_email_inner(
     msg["Subject"] = subject
     msg["Reply-To"] = sender
     msg.set_content(body)
+
+    # Attach Message-ID header for thread-aware reply matching
+    if campaign_id:
+        msg["Message-ID"] = f"<campaign-{campaign_id}@dispo.local>"
 
     logger.info(
         "Sending email to %s via Gmail SMTP — subject: %.60s",

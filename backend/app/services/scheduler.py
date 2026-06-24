@@ -28,7 +28,7 @@ from app.services.buyer_scoring import run_tier_promotions, reset_pitch_counters
 from app.services.aging_monitor import run_aging_monitor
 from app.services.buyer_insights import update_all_buyer_insights
 from app.services.embeddings import generate_embedding
-from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold
+from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold, match_reply_to_campaign
 from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
 from app.services.state_persistence import (
@@ -326,12 +326,8 @@ async def process_buyer_replies() -> int:
                         logger.info("Scheduler: reply from unknown buyer %s — skipping", from_email)
                         continue
 
-                    # 4. Match to the most recent Sent campaign for this buyer
-                    campaign = await db.scalar(
-                        select(Campaign)
-                        .where(Campaign.buyer_id == buyer_id, Campaign.status == "Sent")
-                        .order_by(Campaign.sent_at.desc().nullslast())
-                    )
+                    # 4. Match reply to the correct campaign (thread-aware priority chain)
+                    campaign, confidence_level = await match_reply_to_campaign(db, buyer_id, reply)
 
                     if not campaign:
                         logger.info(
@@ -340,6 +336,11 @@ async def process_buyer_replies() -> int:
                         )
                         continue
 
+                    logger.info(
+                        "Scheduler: reply from buyer %s matched to campaign %s via %s (deal: %s)",
+                        buyer_id, campaign.id, confidence_level, campaign.deal_id,
+                    )
+
                     # 5. Classify the reply via Groq (ghost recovery cancelled inside if needed)
                     classification = await process_reply(
                         reply,
@@ -347,6 +348,11 @@ async def process_buyer_replies() -> int:
                         buyer_id=buyer_id,
                         deal_id=campaign.deal_id,
                     )
+
+                    # Set match_confidence on fallback matches
+                    if confidence_level == "fallback":
+                        classification["match_confidence"] = "low"
+
                     reply_intent = classification["reply_intent"]
 
                     # 6. Update the campaign with reply data
@@ -969,6 +975,7 @@ async def send_ghost_recovery_emails() -> int:
                         to=buyer.email,
                         subject=email_data["subject"],
                         body=email_data["body"],
+                        campaign_id=campaign.id.hex,
                         send_type="reply",
                     )
 

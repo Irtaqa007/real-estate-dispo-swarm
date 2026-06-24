@@ -38,6 +38,7 @@ class FakeAsyncSession:
         self._execute_index = 0
         self._scalar_results = []
         self._scalar_index = 0
+        self._get_results = {}
         self.add_called = False
         self.committed = False
 
@@ -62,7 +63,7 @@ class FakeAsyncSession:
         return None
 
     async def get(self, model, id_):
-        return self._get_result if hasattr(self, '_get_result') else None
+        return self._get_results.get((model, id_))
 
     def add(self, obj):
         self.add_called = True
@@ -89,8 +90,8 @@ class FakeAsyncSession:
         self._scalar_index = 0
         return self
 
-    def with_get_result(self, result):
-        self._get_result = result
+    def with_get_result(self, model_cls, id_, result):
+        self._get_results[(model_cls, id_)] = result
         return self
 
 
@@ -244,7 +245,7 @@ async def test_ghost_detection_fires_after_silence():
     session, unpatch = patch_db(scheduler_mod)
     session.with_execute_results(distinct_result, terminal_result) \
            .with_scalar_results(sent_campaign, replied_campaign, replied_campaign) \
-           .with_get_result(deal)
+           .with_get_result(Deal, deal.id, deal)
 
     try:
         result = await detect_and_flag_ghosts()
@@ -302,7 +303,7 @@ async def test_ghost_detection_skips_inactive_deals():
     distinct_result.all.return_value = [(buyer_id, deal_id)]
 
     session, unpatch = patch_db(scheduler_mod)
-    session.with_execute_results(distinct_result).with_get_result(deal)
+    session.with_execute_results(distinct_result).with_get_result(Deal, deal.id, deal)
 
     try:
         result = await detect_and_flag_ghosts()
@@ -346,7 +347,7 @@ async def test_ghost_detection_skips_recent_activity():
     session, unpatch = patch_db(scheduler_mod)
     session.with_execute_results(distinct_result, terminal_result) \
            .with_scalar_results(sent_campaign) \
-           .with_get_result(deal)
+           .with_get_result(Deal, deal.id, deal)
 
     try:
         result = await detect_and_flag_ghosts()
@@ -492,6 +493,17 @@ async def test_ghost_recovery_cancelled_by_reply():
     buyer.unsubscribed_at = None
     buyer.status = "Active"
 
+    # Create deal mock with proper attributes for match_reply_to_campaign
+    deal = MagicMock(spec=Deal)
+    deal.id = deal_id
+    deal.address = "123 Test St"
+    deal.city = "TestCity"
+    deal.state = "TS"
+    deal.zip = "12345"
+    deal.property_type = "House"
+    deal.asking_price = 200000
+    deal.status = "Available"
+
     # Must return objects with .id and .email attributes (like SQLAlchemy Row objects)
     row1 = MagicMock()
     row1.id = buyer_id
@@ -501,15 +513,19 @@ async def test_ghost_recovery_cancelled_by_reply():
     buyer_result.all.return_value = [row1]
     be_result = MagicMock()
     be_result.all.return_value = []
+    # result for match_reply_to_campaign's campaign query
+    campaign_result = MagicMock()
+    campaign_result.scalars.return_value.all.return_value = [sent_campaign]
     ghost_result = MagicMock()
     ghost_result.scalars.return_value.all.return_value = [ghost_campaign]
     queued_result = MagicMock()
     queued_result.scalars.return_value.all.return_value = []
 
     session, unpatch = patch_db(scheduler_mod)
-    session.with_execute_results(buyer_result, be_result, ghost_result, queued_result) \
+    session.with_execute_results(buyer_result, be_result, campaign_result, ghost_result, queued_result) \
            .with_scalar_results(sent_campaign) \
-           .with_get_result(buyer)
+           .with_get_result(Deal, deal_id, deal) \
+           .with_get_result(Buyer, buyer_id, buyer)
 
     with patch("app.services.scheduler.check_for_replies") as mock_check, \
          patch("app.services.reply_processor.groq_chat_completion") as mock_groq, \

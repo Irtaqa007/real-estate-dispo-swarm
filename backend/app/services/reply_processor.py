@@ -11,14 +11,16 @@ Returns structured intent with: primary_intent, urgency, sentiment, topics, reco
 
 import json
 import logging
+import re
 import uuid
-from typing import Any, Dict, Optional
+from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.schemas import Campaign
+from app.models.schemas import Buyer, Campaign, Deal
 from app.services.audit_logger import audit
 from app.services.groq_client import groq_chat_completion
 
@@ -439,3 +441,216 @@ async def detect_uncertainty_and_hold(
         buyer_id,
     )
     return holding_text
+
+
+# ---------------------------------------------------------------------------
+# Multi-thread reply matching — priority chain
+# ---------------------------------------------------------------------------
+
+
+_RE_CAMPAIGN_ID = re.compile(r"<campaign-([a-f0-9-]+)@dispo\.local>")
+
+
+async def match_reply_to_campaign(
+    db: AsyncSession,
+    buyer_id: uuid.UUID,
+    reply: dict,
+) -> Tuple[Optional[Campaign], str]:
+    """Match a buyer reply to the correct campaign using a priority chain.
+
+    Priority:
+    1. "header" — In-Reply-To / References header Message-ID match
+    2. "subject" — Deal address / city in subject line (fuzzy if needed)
+    3. "body" — Keyword match in reply body
+    4. "fallback" — Most recent Sent campaign (existing behavior, last resort)
+
+    Args:
+        db: Database session.
+        buyer_id: The buyer who sent the reply.
+        reply: Incoming reply dict with subject, body, and optional headers.
+
+    Returns:
+        Tuple of (matched_campaign, confidence_level).
+        confidence_level is "header", "subject", "body", or "fallback".
+    """
+    # ── Method 1: In-Reply-To / References header matching ──
+    headers = reply.get("headers", {})
+    header_text = " ".join([
+        headers.get("In-Reply-To", ""),
+        headers.get("References", ""),
+    ])
+    header_match = _RE_CAMPAIGN_ID.search(header_text)
+    if header_match:
+        try:
+            campaign_uuid = uuid.UUID(header_match.group(1))
+            campaign = await db.get(Campaign, campaign_uuid)
+            if campaign and campaign.buyer_id == buyer_id:
+                logger.info(
+                    "Reply from buyer %s matched to campaign %s via header (deal: %s)",
+                    buyer_id, campaign.id, campaign.deal_id,
+                )
+                return campaign, "header"
+        except ValueError:
+            pass
+
+    # ── Load all active campaigns for this buyer ──
+    active_campaigns = await db.execute(
+        select(Campaign)
+        .where(
+            Campaign.buyer_id == buyer_id,
+            Campaign.status.in_(["Sent", "Replied"]),
+        )
+        .order_by(Campaign.sent_at.desc().nullslast())
+    )
+    all_campaigns: List[Campaign] = list(active_campaigns.scalars().all())
+
+    if not all_campaigns:
+        return None, "fallback"
+
+    reply_subject = (reply.get("subject") or "").lower()
+    reply_body = (reply.get("body") or "").lower()
+
+    # Gather unique deal ids and fetch the Deal records
+    deal_ids = list({c.deal_id for c in all_campaigns})
+    deals_map: Dict[uuid.UUID, Deal] = {}
+    for did in deal_ids:
+        deal = await db.get(Deal, did)
+        if deal:
+            deals_map[did] = deal
+
+    # ── Method 2: Subject line deal matching ──
+    if reply_subject:
+        best_subject_did: Optional[uuid.UUID] = None
+        best_subject_score = 0.0
+
+        for did, deal in deals_map.items():
+            if deal.address and deal.address.lower() in reply_subject:
+                score = 1.0
+            elif deal.city and deal.city.lower() in reply_subject:
+                score = 0.9
+            else:
+                score = SequenceMatcher(
+                    None, (deal.address or "").lower(), reply_subject
+                ).ratio()
+
+            if score > best_subject_score:
+                best_subject_score = score
+                best_subject_did = did
+
+        if best_subject_score >= 0.7 and best_subject_did:
+            deal_campaigns = [c for c in all_campaigns if c.deal_id == best_subject_did]
+            if deal_campaigns:
+                logger.info(
+                    "Reply from buyer %s matched to campaign %s via subject (deal: %s, score: %.2f)",
+                    buyer_id, deal_campaigns[0].id, best_subject_did, best_subject_score,
+                )
+                return deal_campaigns[0], "subject"
+
+    # ── Method 3: Body content semantic matching ──
+    if reply_body:
+        best_body_did: Optional[uuid.UUID] = None
+        best_body_score = 0
+
+        for did, deal in deals_map.items():
+            keywords: List[str] = [
+                deal.address or "",
+                deal.city or "",
+                deal.state or "",
+                str(deal.zip) if deal.zip else "",
+                deal.property_type or "",
+                str(int(deal.asking_price)) if deal.asking_price else "",
+            ]
+            score = sum(1 for kw in keywords if kw and kw.lower() in reply_body)
+
+            if score > best_body_score:
+                best_body_score = score
+                best_body_did = did
+
+        if best_body_score >= 2 and best_body_did:
+            deal_campaigns = [c for c in all_campaigns if c.deal_id == best_body_did]
+            if deal_campaigns:
+                logger.info(
+                    "Reply from buyer %s matched to campaign %s via body (deal: %s, score: %d)",
+                    buyer_id, deal_campaigns[0].id, best_body_did, best_body_score,
+                )
+                return deal_campaigns[0], "body"
+
+    # ── Method 4: Fallback — most recent Sent campaign ──
+    sent_campaigns = [c for c in all_campaigns if c.status == "Sent"]
+    fallback = sent_campaigns[0] if sent_campaigns else all_campaigns[0]
+
+    logger.warning(
+        "Reply from buyer %s matched to most-recent campaign (fallback) — "
+        "could not determine deal from headers, subject, or body. Review manually.",
+        buyer_id,
+    )
+    return fallback, "fallback"
+
+
+# ---------------------------------------------------------------------------
+# Buyer full-context loader (all open threads)
+# ---------------------------------------------------------------------------
+
+
+async def load_buyer_full_context(
+    db: AsyncSession,
+    buyer_id: uuid.UUID,
+    primary_deal_id: uuid.UUID,
+) -> dict:
+    """Load complete buyer context across all active deals.
+
+    Returns:
+        dict with keys:
+            buyer: Buyer object.
+            primary_deal: Deal object being replied about.
+            primary_thread: List of Campaign rows for primary deal, ordered by sent_at.
+            other_active_deals: List of dicts with deal, thread, status.
+            total_active_deals: int.
+    """
+    buyer = await db.get(Buyer, buyer_id)
+
+    # Load all campaigns for this buyer
+    campaigns_result = await db.execute(
+        select(Campaign)
+        .where(Campaign.buyer_id == buyer_id)
+        .order_by(Campaign.sent_at.asc().nullslast())
+    )
+    all_campaigns: List[Campaign] = list(campaigns_result.scalars().all())
+
+    deal_ids = {c.deal_id for c in all_campaigns}
+
+    # Load all relevant deals
+    primary_deal = await db.get(Deal, primary_deal_id)
+    active_deal_ids: set[uuid.UUID] = set()
+    deal_objects: Dict[uuid.UUID, Deal] = {}
+
+    for did in deal_ids:
+        deal = await db.get(Deal, did)
+        if deal and deal.status in ("Available", "Campaign Launched", "Under Contract"):
+            active_deal_ids.add(did)
+            deal_objects[did] = deal
+
+    # Split campaigns into primary thread vs other active deals
+    primary_thread = [c for c in all_campaigns if c.deal_id == primary_deal_id]
+
+    other_active_deals: List[dict] = []
+    for did in active_deal_ids:
+        if did == primary_deal_id:
+            continue
+        other_deal = deal_objects.get(did)
+        if not other_deal:
+            continue
+        other_thread = [c for c in all_campaigns if c.deal_id == did]
+        other_active_deals.append({
+            "deal": other_deal,
+            "thread": other_thread,
+            "status": other_deal.status,
+        })
+
+    return {
+        "buyer": buyer,
+        "primary_deal": primary_deal,
+        "primary_thread": primary_thread,
+        "other_active_deals": other_active_deals,
+        "total_active_deals": 1 + len(other_active_deals),
+    }
