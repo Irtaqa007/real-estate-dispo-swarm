@@ -166,10 +166,55 @@ async def process_reply(
                 buyer_id, deal_id, e, exc_info=True,
             )
 
+    # ── Load full buyer context (all open threads across all deals) ──
+    full_context = None
+    if db is not None and buyer_id is not None and deal_id is not None:
+        try:
+            full_context = await load_buyer_full_context(
+                db=db,
+                buyer_id=buyer_id,
+                primary_deal_id=deal_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not load full buyer context for buyer %s: %s",
+                buyer_id, e,
+            )
+            full_context = None
+
     user_prompt = _CLASSIFICATION_USER_PROMPT_TEMPLATE.format(
         subject=subject,
         body=body,
     )
+
+    # ── Inject other-active-deals context into the AI prompt ──
+    if full_context and full_context["other_active_deals"]:
+        other_lines = [
+            "",
+            "CONTEXT — OTHER ACTIVE DEALS WITH THIS BUYER:",
+            "Be aware of these when responding. If the buyer references another deal, "
+            "acknowledge it naturally. Never confuse deal details across threads.",
+            "",
+        ]
+        for item in full_context["other_active_deals"]:
+            other_deal = item["deal"]
+            other_thread = item["thread"]
+            last_interaction = max(
+                (c.sent_at for c in other_thread if c.sent_at),
+                default=None,
+            )
+            last_str = (
+                last_interaction.strftime("%Y-%m-%d")
+                if last_interaction else "unknown"
+            )
+            other_lines.append(
+                f"- {other_deal.address}, {other_deal.city} "
+                f"({other_deal.property_type}) | "
+                f"Asking: ${float(other_deal.asking_price):,.0f} | "
+                f"Last interaction: {last_str} | "
+                f"Status: {item['status']}"
+            )
+        user_prompt += "\n" + "\n".join(other_lines)
 
     messages = [
         {"role": "system", "content": _CLASSIFICATION_SYSTEM_PROMPT},
