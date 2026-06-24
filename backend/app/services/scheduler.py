@@ -326,11 +326,7 @@ async def process_buyer_replies() -> int:
                         logger.info("Scheduler: reply from unknown buyer %s — skipping", from_email)
                         continue
 
-                    # 4. Classify the reply via Groq
-                    classification = await process_reply(reply)
-                    reply_intent = classification["reply_intent"]
-
-                    # 5. Match to the most recent Sent campaign for this buyer
+                    # 4. Match to the most recent Sent campaign for this buyer
                     campaign = await db.scalar(
                         select(Campaign)
                         .where(Campaign.buyer_id == buyer_id, Campaign.status == "Sent")
@@ -343,6 +339,15 @@ async def process_buyer_replies() -> int:
                             from_email,
                         )
                         continue
+
+                    # 5. Classify the reply via Groq (ghost recovery cancelled inside if needed)
+                    classification = await process_reply(
+                        reply,
+                        db=db,
+                        buyer_id=buyer_id,
+                        deal_id=campaign.deal_id,
+                    )
+                    reply_intent = classification["reply_intent"]
 
                     # 6. Update the campaign with reply data
                     now = datetime.now(timezone.utc)
@@ -357,30 +362,6 @@ async def process_buyer_replies() -> int:
                     else:
                         campaign.status = "Replied"
                     db.add(campaign)
-
-                    # ── Ghost recovery cancellation: if buyer was in ghost recovery, reset it ──
-                    ghost_cancelled = False
-                    ghost_touches_before = 0
-                    ghost_campaigns = await db.execute(
-                        select(Campaign).where(
-                            Campaign.buyer_id == buyer_id,
-                            Campaign.deal_id == campaign.deal_id,
-                            Campaign.ghost_detected_at.isnot(None),
-                        )
-                    )
-                    for gc in ghost_campaigns.scalars().all():
-                        ghost_touches_before = gc.ghost_recovery_touch
-                        gc.ghost_detected_at = None
-                        gc.ghost_recovery_touch = 0
-                        gc.ghost_recovery_sent_at = None
-                        db.add(gc)
-                        ghost_cancelled = True
-
-                    if ghost_cancelled:
-                        logger.info(
-                            "Ghost recovery cancelled: buyer %s replied on deal %s after %d recovery touches",
-                            buyer_id, campaign.deal_id, ghost_touches_before,
-                        )
 
                     # 7. Fetch buyer and update last_reply_at
                     buyer_obj = await db.get(Buyer, buyer_id)

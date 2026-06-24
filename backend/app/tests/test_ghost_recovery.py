@@ -18,6 +18,8 @@ import pytest
 from app.config import settings
 from app.models.schemas import ActivityLog, Buyer, Campaign, Deal
 
+import json
+
 
 # ===========================================================================
 # Fake async database session (no AsyncMock wrapping issues)
@@ -64,6 +66,9 @@ class FakeAsyncSession:
 
     def add(self, obj):
         self.add_called = True
+
+    async def flush(self):
+        pass
 
     async def commit(self):
         self.committed = True
@@ -507,24 +512,25 @@ async def test_ghost_recovery_cancelled_by_reply():
            .with_get_result(buyer)
 
     with patch("app.services.scheduler.check_for_replies") as mock_check, \
-         patch("app.services.scheduler.process_reply") as mock_process, \
-         patch("app.services.scheduler.audit") as mock_audit:
+         patch("app.services.reply_processor.groq_chat_completion") as mock_groq, \
+         patch("app.services.reply_processor.audit") as mock_audit:
 
         mock_check.return_value = [
             {"from_email": "testbuyer@example.com", "subject": "Re: Test", "body": "I'm back!"}
         ]
-        mock_process.return_value = {
-            "reply_intent": "Interested",
-            "primary_intent": "Interested",
-            "urgency": "Medium",
-            "sentiment": 4,
-            "topics": ["price"],
-            "recommended_action": "send_details",
-            "counter_price": None,
-            "ai_extracted_insights": "Buyer is back",
-            "buyer_profile_updates": {},
-            "question_answer": None,
-        }
+        mock_groq.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content=json.dumps({
+                "primary_intent": "Interested",
+                "urgency": "Medium",
+                "sentiment": 4,
+                "topics": ["price"],
+                "recommended_action": "send_details",
+                "counter_price": None,
+                "summary": "Buyer is back",
+                "buybox_changes": None,
+                "question_answer": None,
+            })))]
+        )
 
         try:
             result = await process_buyer_replies()

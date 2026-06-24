@@ -14,7 +14,11 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
+from app.models.schemas import Campaign
 from app.services.audit_logger import audit
 from app.services.groq_client import groq_chat_completion
 
@@ -85,11 +89,19 @@ _INTENT_MAP: Dict[str, str] = {
 }
 
 
-async def process_reply(email_data: dict) -> dict:
+async def process_reply(
+    email_data: dict,
+    db: Optional[AsyncSession] = None,
+    buyer_id: Optional[uuid.UUID] = None,
+    deal_id: Optional[uuid.UUID] = None,
+) -> dict:
     """Use Groq AI to classify a buyer's reply with multi-dimensional intent.
 
     Args:
         email_data: dict with keys ``subject`` and ``body`` (at minimum).
+        db: Optional DB session for ghost recovery cancellation.
+        buyer_id: Required with db and deal_id for ghost recovery check.
+        deal_id: Required with db and buyer_id for ghost recovery check.
 
     Returns:
         dict with keys:
@@ -107,6 +119,50 @@ async def process_reply(email_data: dict) -> dict:
     subject = (email_data.get("subject") or "").strip()
     body = (email_data.get("body") or "").strip()
     from_email = (email_data.get("from_email") or "unknown").strip()
+
+    # ── Ghost recovery cancellation: if buyer is in ghost recovery for this deal, reset it ──
+    if db is not None and buyer_id is not None and deal_id is not None:
+        try:
+            ghost_rows = await db.execute(
+                select(Campaign).where(
+                    Campaign.buyer_id == buyer_id,
+                    Campaign.deal_id == deal_id,
+                    Campaign.ghost_detected_at.isnot(None),
+                )
+            )
+            ghost_cancelled = False
+            ghost_touches_before = 0
+            for gc in ghost_rows.scalars().all():
+                ghost_touches_before = gc.ghost_recovery_touch
+                gc.ghost_detected_at = None
+                gc.ghost_recovery_touch = 0
+                gc.ghost_recovery_sent_at = None
+                db.add(gc)
+                ghost_cancelled = True
+
+            if ghost_cancelled:
+                logger.info(
+                    "Ghost recovery cancelled: buyer %s replied on deal %s after %d recovery touches",
+                    buyer_id, deal_id, ghost_touches_before,
+                )
+                await audit.log(
+                    db,
+                    entity_type="campaign",
+                    entity_id=uuid.uuid4(),
+                    action="ghost_recovery_cancelled",
+                    metadata={
+                        "buyer_id": str(buyer_id),
+                        "deal_id": str(deal_id),
+                        "recovery_touches_sent": ghost_touches_before,
+                        "alert_user": False,
+                    },
+                )
+                await db.flush()
+        except Exception as e:
+            logger.error(
+                "Failed to cancel ghost recovery for buyer %s, deal %s: %s",
+                buyer_id, deal_id, e, exc_info=True,
+            )
 
     user_prompt = _CLASSIFICATION_USER_PROMPT_TEMPLATE.format(
         subject=subject,
