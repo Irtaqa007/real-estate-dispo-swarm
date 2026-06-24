@@ -39,8 +39,10 @@ from app.services.resilience import (
     with_retry,
 )
 from app.services.state_persistence import (
-    increment_gmail_send_count,
+    get_gmail_cap_warning_sent,
     get_gmail_send_status,
+    increment_gmail_send_count,
+    save_gmail_cap_warning_sent,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,9 +107,6 @@ _RETRYABLE_SMTP = (
     OSError,
 )
 
-# ── 90% warning sent today flag (in-memory, reset on date change) ──
-_cap_warning_date: str = ""
-
 
 async def _check_daily_cap(send_type: str) -> bool:
     """Check whether a campaign send is allowed under the daily cap.
@@ -129,31 +128,32 @@ async def _check_daily_cap(send_type: str) -> bool:
         )
         return False
 
-    # ── Approaching-cap alert at 90% (once per day) ──
-    global _cap_warning_date
-    from datetime import datetime, timezone
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if status["warning_threshold_hit"] and _cap_warning_date != today:
-        _cap_warning_date = today
-        # Fire audit alert
-        try:
-            import app.database as _db
-            async with _db.async_session_factory() as alert_db:
-                await audit.log(
-                    alert_db,
-                    entity_type="system",
-                    entity_id=uuid.uuid4(),
-                    action="gmail_cap_warning",
-                    metadata={
-                        "count": status["sends_today"],
-                        "cap": status["daily_cap"],
-                        "percent": 90,
-                        "alert_user": True,
-                    },
-                )
-                await alert_db.commit()
-        except Exception as e:
-            logger.warning("Failed to log gmail cap warning: %s", e, exc_info=True)
+    # ── Approaching-cap alert at 90% (once per day, DB-backed) ──
+    if status["warning_threshold_hit"]:
+        warning_sent_date = await get_gmail_cap_warning_sent()
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if warning_sent_date != today:
+            await save_gmail_cap_warning_sent(today)
+            # Fire audit alert
+            try:
+                import app.database as _db
+                async with _db.async_session_factory() as alert_db:
+                    await audit.log(
+                        alert_db,
+                        entity_type="system",
+                        entity_id=uuid.uuid4(),
+                        action="gmail_cap_warning",
+                        metadata={
+                            "count": status["sends_today"],
+                            "cap": status["daily_cap"],
+                            "percent": 90,
+                            "alert_user": True,
+                        },
+                    )
+                    await alert_db.commit()
+            except Exception as e:
+                logger.warning("Failed to log gmail cap warning: %s", e, exc_info=True)
 
     return True
 

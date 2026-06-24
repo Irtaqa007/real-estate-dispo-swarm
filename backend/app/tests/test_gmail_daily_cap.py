@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services import state_persistence as sp
-from app.services.gmail_service import _check_daily_cap, send_email, _cap_warning_date
+from app.services.gmail_service import _check_daily_cap, send_email
 
 
 # ===========================================================================

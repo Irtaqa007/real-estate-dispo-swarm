@@ -38,6 +38,7 @@ KEY_METRICS = "metrics"
 KEY_IDEMPOTENCY_STORE = "idempotency_store"
 KEY_GROQ_DAILY_COUNTER = "groq_daily_counter"
 KEY_GMAIL_DAILY_SENDS = "gmail_daily_sends"
+KEY_GMAIL_CAP_WARNING_SENT = "gmail_cap_warning_sent"
 
 # ---------------------------------------------------------------------------
 # Generic helpers — single-key ops still open their own session
@@ -350,6 +351,33 @@ async def get_gmail_send_status() -> Dict[str, Any]:
         "warning_threshold_hit": warning_threshold_hit,
         "resets_at": reset_at,
     }
+
+
+# ---------------------------------------------------------------------------
+# Gmail cap warning sent date
+# ---------------------------------------------------------------------------
+
+
+async def get_gmail_cap_warning_sent() -> str:
+    """Get the date for which the 90% cap warning was last sent.
+
+    Returns:
+        Date string YYYY-MM-DD if warning was sent today, or empty string.
+    """
+    raw = await _get_state(KEY_GMAIL_CAP_WARNING_SENT)
+    if not raw or not isinstance(raw, dict):
+        return ""
+    return str(raw.get("date", ""))
+
+
+async def save_gmail_cap_warning_sent(date_str: str) -> None:
+    """Persist today's date as the cap warning sent date.
+
+    Args:
+        date_str: Today's date as YYYY-MM-DD.
+    """
+    await _set_state(KEY_GMAIL_CAP_WARNING_SENT, {"date": date_str})
+    logger.debug("Persisted gmail cap warning sent date: %s", date_str)
 
 
 # ---------------------------------------------------------------------------
