@@ -20,9 +20,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.schemas import Buyer, Campaign, Deal
+from app.models.schemas import Buyer, Campaign, Deal, JVPartner
+from datetime import datetime, timezone
+
 from app.services.audit_logger import audit
 from app.services.groq_client import groq_chat_completion
+from app.services.pass_reason_extractor import extract_pass_reason
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +272,157 @@ async def process_reply(
             bool(buybox_changes), bool(question_answer),
         )
 
+        # ── Pass reason capture: extract and store structured pass reason ──
+        pass_reason_followup = None
+        if primary_intent == "Pass" and db is not None and buyer_id is not None and deal_id is not None:
+            try:
+                # Find the campaign being replied to for this buyer+deal
+                campaign_result = await db.execute(
+                    select(Campaign)
+                    .where(
+                        Campaign.buyer_id == buyer_id,
+                        Campaign.deal_id == deal_id,
+                    )
+                    .order_by(Campaign.sent_at.desc().nullslast())
+                    .limit(1)
+                )
+                campaign_row = campaign_result.scalar_one_or_none()
+
+                if campaign_row:
+                    # Load deal and buyer
+                    deal = await db.get(Deal, deal_id)
+                    buyer = await db.get(Buyer, buyer_id)
+
+                    if deal and buyer:
+                        # Load thread context (last 3 Campaign rows for this buyer+deal)
+                        thread_result = await db.execute(
+                            select(Campaign)
+                            .where(
+                                Campaign.buyer_id == buyer_id,
+                                Campaign.deal_id == deal_id,
+                            )
+                            .order_by(Campaign.sent_at.desc().nullslast())
+                            .limit(3)
+                        )
+                        thread_campaigns = list(thread_result.scalars().all())
+
+                        # Call AI extraction
+                        pass_result = await extract_pass_reason(
+                            reply_body=body,
+                            thread_context=thread_campaigns,
+                            deal=deal,
+                            buyer=buyer,
+                        )
+
+                        now = datetime.now(timezone.utc)
+
+                        # Update campaign pass fields
+                        campaign_row.pass_reason_category = pass_result["category"]
+                        campaign_row.pass_reason_raw = pass_result["raw"]
+                        campaign_row.pass_reason_confidence = pass_result["confidence"]
+                        campaign_row.passed_at = now
+                        db.add(campaign_row)
+
+                        # Update deal pass_count and pass_reasons_summary
+                        deal.pass_count = (deal.pass_count or 0) + 1
+                        existing_summary = deal.pass_reasons_summary or {}
+                        existing_summary[pass_result["category"]] = existing_summary.get(pass_result["category"], 0) + 1
+                        deal.pass_reasons_summary = existing_summary
+                        db.add(deal)
+
+                        # Update JV partner stats
+                        if deal.jv_partner_id:
+                            jv = await db.get(JVPartner, deal.jv_partner_id)
+                            if jv:
+                                jv.total_passes = (jv.total_passes or 0) + 1
+                                if pass_result["category"] == "price_too_high":
+                                    jv.overprice_flag_count = (jv.overprice_flag_count or 0) + 1
+                                if pass_result["category"] == "title_issue":
+                                    jv.title_issue_count = (jv.title_issue_count or 0) + 1
+                                if pass_result["category"] == "condition":
+                                    jv.condition_issue_count = (jv.condition_issue_count or 0) + 1
+                                existing_jv_breakdown = jv.pass_reasons_breakdown or {}
+                                existing_jv_breakdown[pass_result["category"]] = existing_jv_breakdown.get(pass_result["category"], 0) + 1
+                                jv.pass_reasons_breakdown = existing_jv_breakdown
+                                db.add(jv)
+
+                        # Apply buy box signal if detected
+                        if pass_result.get("buy_box_signal"):
+                            try:
+                                signal = pass_result["buy_box_signal"]
+                                field = signal.get("field")
+                                direction = signal.get("direction")
+                                signal_strength = signal.get("signal_strength", "medium")
+
+                                if field == "price_max" and direction == "lower":
+                                    if buyer.price_max is not None:
+                                        buyer.price_max = buyer.price_max * 0.9  # Reduce by 10%
+                                elif field == "price_max" and direction == "higher":
+                                    if buyer.price_max is not None:
+                                        buyer.price_max = buyer.price_max * 1.1  # Increase by 10%
+                                elif field == "price_min" and direction == "lower":
+                                    if buyer.price_min is not None:
+                                        buyer.price_min = buyer.price_min * 0.9
+                                elif field == "price_min" and direction == "higher":
+                                    buyer.price_min = (buyer.price_min or 0) * 0.9 or 10000
+                                elif field == "pref_property_type" and direction == "narrower":
+                                    if buyer.pref_property_type != "Land":
+                                        buyer.pref_property_type = None  # Reset to both
+                                elif field == "pref_cities" and direction == "narrower":
+                                    buyer.pref_cities = []  # Reset city filter
+
+                                db.add(buyer)
+                                logger.info(
+                                    "Buy box signal applied to buyer %s: field=%s, direction=%s, strength=%s",
+                                    buyer_id, field, direction, signal_strength,
+                                )
+                            except Exception as signal_err:
+                                logger.warning(
+                                    "Failed to apply buy box signal for buyer %s: %s",
+                                    buyer_id, signal_err, exc_info=True,
+                                )
+
+                        # Create activity log entry
+                        await audit.log(
+                            db,
+                            entity_type="deal",
+                            entity_id=deal_id,
+                            action="buyer_passed",
+                            metadata={
+                                "buyer_id": str(buyer_id),
+                                "deal_id": str(deal_id),
+                                "jv_partner_id": str(deal.jv_partner_id) if deal.jv_partner_id else None,
+                                "pass_reason_category": pass_result["category"],
+                                "pass_reason_raw": pass_result["raw"],
+                                "confidence": pass_result["confidence"],
+                                "deal_pass_count": deal.pass_count,
+                                "alert_user": False,
+                            },
+                        )
+
+                        # Generate follow-up question if confidence is low
+                        if pass_result["confidence"] == "low":
+                            followup_body = (
+                                "Totally understand — just so I can match you better "
+                                "next time, was it the price, location, condition, "
+                                "or something else?"
+                            )
+                            sign_off = settings.operator_email_signature.strip()
+                            if sign_off:
+                                followup_body += "\n\n" + sign_off
+                            pass_reason_followup = followup_body
+
+                        logger.info(
+                            "Pass reason captured: buyer %s, deal %s, category=%s, confidence=%s",
+                            buyer_id, deal_id, pass_result["category"], pass_result["confidence"],
+                        )
+
+            except Exception as pass_err:
+                logger.warning(
+                    "Failed to capture pass reason for buyer %s, deal %s: %s",
+                    buyer_id, deal_id, pass_err, exc_info=True,
+                )
+
         return {
             "reply_intent": primary_intent,
             "primary_intent": primary_intent,
@@ -282,6 +436,7 @@ async def process_reply(
                 {"buy_box": buybox_changes} if buybox_changes else {}
             ),
             "question_answer": question_answer or None,
+            "pass_reason_followup": pass_reason_followup,
         }
 
     except json.JSONDecodeError as e:
@@ -297,10 +452,11 @@ async def process_reply(
             "topics": [],
             "recommended_action": "",
             "counter_price": None,
-            "ai_extracted_insights": f"Failed to classify: {body[:200]}",
-            "buyer_profile_updates": {},
+            "ai_extracted_insights": f"Failed to classify: {body[:200]}",            "buyer_profile_updates": {},
             "question_answer": None,
+            "pass_reason_followup": None,
         }
+
     except Exception as e:
         logger.error(
             "Groq API error classifying reply from %s: %s",
@@ -317,6 +473,7 @@ async def process_reply(
             "ai_extracted_insights": f"Classification error: {e}",
             "buyer_profile_updates": {},
             "question_answer": None,
+            "pass_reason_followup": None,
         }
 
 

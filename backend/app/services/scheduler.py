@@ -353,6 +353,28 @@ async def process_buyer_replies() -> int:
                     if confidence_level == "fallback":
                         classification["match_confidence"] = "low"
 
+                    # ── Send pass reason follow-up question if confidence is low ──
+                    pass_reason_followup = classification.get("pass_reason_followup")
+                    if pass_reason_followup:
+                        try:
+                            buyer_for_followup = await db.get(Buyer, buyer_id)
+                            if buyer_for_followup and buyer_for_followup.email:
+                                await send_email(
+                                    to=buyer_for_followup.email,
+                                    subject=f"Re: {reply.get('subject', '')}",
+                                    body=pass_reason_followup,
+                                    send_type="reply",
+                                )
+                                logger.info(
+                                    "Scheduler: pass reason follow-up sent to buyer %s on deal %s",
+                                    buyer_id, campaign.deal_id,
+                                )
+                        except Exception as followup_err:
+                            logger.warning(
+                                "Scheduler: failed to send pass reason follow-up to buyer %s: %s",
+                                buyer_id, followup_err, exc_info=True,
+                            )
+
                     reply_intent = classification["reply_intent"]
 
                     # 6. Update the campaign with reply data

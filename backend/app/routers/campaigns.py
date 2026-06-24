@@ -171,6 +171,28 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
         if confidence_level == "fallback":
             classification["match_confidence"] = "low"
 
+        # ── Send pass reason follow-up question if confidence is low ──
+        pass_reason_followup = classification.get("pass_reason_followup")
+        if pass_reason_followup:
+            try:
+                buyer_obj_for_send = await db.get(Buyer, buyer_id)
+                if buyer_obj_for_send and buyer_obj_for_send.email:
+                    await send_email(
+                        to=buyer_obj_for_send.email,
+                        subject=f"Re: {reply.get('subject', '')}",
+                        body=pass_reason_followup,
+                        send_type="reply",
+                    )
+                    logger.info(
+                        "Pass reason follow-up sent to buyer %s on deal %s",
+                        buyer_id, campaign.deal_id,
+                    )
+            except Exception as followup_err:
+                logger.warning(
+                    "Failed to send pass reason follow-up to buyer %s: %s",
+                    buyer_id, followup_err, exc_info=True,
+                )
+
         # 6. Update the campaign with reply data
         campaign.reply_received_at = datetime.now(timezone.utc)
         campaign.reply_body = reply["body"]

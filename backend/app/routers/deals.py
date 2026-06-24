@@ -10,7 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.schemas import ActivityLog, Buyer, Deal, JVPartner
+from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, JVPartner
+from app.services.groq_client import groq_chat_completion
 from app.schemas import (
     CloseDealRequest,
     CloseDealResponse,
@@ -507,6 +508,96 @@ async def close_deal(
         buyer_updated=buyer_updated,
         jv_updated=jv_updated,
     )
+
+
+@router.get("/{deal_id}/pass-intelligence")
+async def get_deal_pass_intelligence(
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get pass intelligence for a deal.
+
+    Returns pass reason summary, list of passes with buyer details,
+    and an AI-generated recommendation if enough data exists.
+    """
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deal with id '{deal_id}' not found",
+        )
+
+    # Fetch all Passed campaigns for this deal with pass reasons
+    campaign_result = await db.execute(
+        select(Campaign)
+        .where(
+            Campaign.deal_id == deal_id,
+            Campaign.status == "Passed",
+            Campaign.pass_reason_category.isnot(None),
+        )
+        .order_by(Campaign.passed_at.desc().nullslast())
+    )
+    passed_campaigns = campaign_result.scalars().all()
+
+    # Build passes list with buyer info
+    passes = []
+    for c in passed_campaigns:
+        buyer = await db.get(Buyer, c.buyer_id)
+        passes.append({
+            "buyer_name": buyer.full_name if buyer else "Unknown",
+            "category": c.pass_reason_category,
+            "raw": c.pass_reason_raw or "",
+            "confidence": c.pass_reason_confidence or "low",
+            "passed_at": c.passed_at.isoformat() if c.passed_at else None,
+        })
+
+    # Determine top reason
+    summary = deal.pass_reasons_summary or {}
+    top_reason = max(summary, key=summary.get) if summary else None
+
+    # Generate AI recommendation if enough data
+    recommendation = None
+    pass_count = deal.pass_count or 0
+    if pass_count >= 3 and summary:
+        try:
+            summary_text = "; ".join(f"{k}: {v}" for k, v in sorted(summary.items(), key=lambda x: -x[1]))
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are a real estate deal analyst. Provide one sentence of actionable advice.",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Deal: {deal.address}, {deal.city}, {deal.state}\n"
+                        f"Property Type: {deal.property_type}\n"
+                        f"Asking Price: ${float(deal.asking_price):,.0f}\n"
+                        f"Pass count: {pass_count}\n"
+                        f"Pass reasons summary: {summary_text}\n\n"
+                        f"Provide one sentence recommending how to improve this deal based on pass patterns."
+                    ),
+                },
+            ]
+            response = await groq_chat_completion(
+                messages=messages,
+                model="llama-3.1-8b-instant",
+                temperature=0.1,
+                max_tokens=100,
+            )
+            recommendation = response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.warning("Failed to generate pass intelligence recommendation: %s", e, exc_info=True)
+
+    return {
+        "deal_id": str(deal_id),
+        "address": deal.address,
+        "pass_count": pass_count,
+        "pass_reasons_summary": summary,
+        "top_reason": top_reason,
+        "passes": passes,
+        "recommendation": recommendation,
+    }
 
 
 # ---------------------------------------------------------------------------

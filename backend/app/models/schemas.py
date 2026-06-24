@@ -119,7 +119,11 @@ class JVPartner(Base):
     total_revenue_generated = Column(Numeric(19, 2), default=0)
     avg_buyer_feedback_score = Column(Float, default=0)
     title_issue_rate = Column(Float, default=0)
+    title_issue_count = Column(Integer, default=0)
+    condition_issue_count = Column(Integer, default=0)
     overprice_flag_count = Column(Integer, default=0)
+    total_passes = Column(Integer, default=0)
+    pass_reasons_breakdown = Column(JSONB, nullable=True)  # Tally: {"price_too_high": 7, "title_issue": 2}
     total_split_revenue = Column(Numeric(19, 2), default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -159,6 +163,8 @@ class Deal(Base):
     title_status = Column(Text, nullable=False)  # Clear, Liens, Probate, Other
     photos = Column(ARRAY(Text), nullable=True)
     status = Column(Text, default="Available")  # Available, Under Contract, Sold, Dead
+    pass_count = Column(Integer, default=0)  # Total buyers who passed on this deal
+    pass_reasons_summary = Column(JSONB, nullable=True)  # Tally: {"price_too_high": 3, "timing": 1}
     assigned_buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id"), nullable=True)
     jv_partner_id = Column(UUID(as_uuid=True), ForeignKey("jv_partners.id"), nullable=True)
     jv_split_percentage = Column(Numeric(5, 2), default=50)
@@ -207,6 +213,10 @@ class Campaign(Base):
     ghost_detected_at = Column(DateTime(timezone=True), nullable=True)
     ghost_recovery_touch = Column(Integer, default=0)
     ghost_recovery_sent_at = Column(DateTime(timezone=True), nullable=True)
+    pass_reason_category = Column(Text, nullable=True)  # price_too_high, wrong_market, condition, etc.
+    pass_reason_raw = Column(Text, nullable=True)  # Buyer's exact words (max 500 chars)
+    pass_reason_confidence = Column(Text, nullable=True)  # high, medium, low
+    passed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
