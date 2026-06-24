@@ -204,6 +204,9 @@ class Campaign(Base):
     ai_extracted_insights = Column(Text, nullable=True)
     buyer_profile_updated = Column(Boolean, default=False)
     question_round = Column(Integer, default=0)
+    ghost_detected_at = Column(DateTime(timezone=True), nullable=True)
+    ghost_recovery_touch = Column(Integer, default=0)
+    ghost_recovery_sent_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

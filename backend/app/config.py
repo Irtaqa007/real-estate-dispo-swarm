@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     operator_never_say: str = ""
     operator_context: str = ""
 
+    # Ghost detection and recovery settings
+    ghost_silence_hours: int = 96
+    ghost_max_recovery_touches: int = 5
+    ghost_recovery_intervals_days: list[int] = [4, 7, 12, 18, 25]
+
     # Auto-match settings: background scheduler task that matches all active
     # deals against all eligible buyers and auto-launches campaigns.
     # Set to False to disable the auto-match job (e.g. during debugging).

@@ -170,6 +170,30 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
             campaign.status = "Replied"
         db.add(campaign)
 
+        # ── Ghost recovery cancellation: if buyer was in ghost recovery, reset it ──
+        ghost_cancelled = False
+        ghost_touches_before = 0
+        ghost_campaigns = await db.execute(
+            select(Campaign).where(
+                Campaign.buyer_id == buyer_id,
+                Campaign.deal_id == campaign.deal_id,
+                Campaign.ghost_detected_at.isnot(None),
+            )
+        )
+        for gc in ghost_campaigns.scalars().all():
+            ghost_touches_before = gc.ghost_recovery_touch
+            gc.ghost_detected_at = None
+            gc.ghost_recovery_touch = 0
+            gc.ghost_recovery_sent_at = None
+            db.add(gc)
+            ghost_cancelled = True
+
+        if ghost_cancelled:
+            logger.info(
+                "Ghost recovery cancelled: buyer %s replied on deal %s after %d recovery touches",
+                buyer_id, campaign.deal_id, ghost_touches_before,
+            )
+
         # 7. Fetch buyer once for all updates
         # 7a. Buy Box Auto-Update (feature 1): if buybox changed, extract and update
         profile_updates = classification.get("buyer_profile_updates", {})
