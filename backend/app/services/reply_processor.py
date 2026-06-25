@@ -361,10 +361,15 @@ async def process_reply(
                                     if buyer.price_max is not None:
                                         buyer.price_max = buyer.price_max * 1.1  # Increase by 10%
                                 elif field == "price_min" and direction == "lower":
-                                    if buyer.price_min is not None:
+                                    if buyer.price_min and buyer.price_min > 0:
                                         buyer.price_min = buyer.price_min * 0.9
+                                    # If price_min is None or 0, skip — no valid
+                                    # baseline to adjust from
                                 elif field == "price_min" and direction == "higher":
-                                    buyer.price_min = (buyer.price_min or 0) * 0.9 or 10000
+                                    if buyer.price_min and buyer.price_min > 0:
+                                        buyer.price_min = buyer.price_min * 1.1
+                                    # If price_min is None or 0, skip — no valid
+                                    # baseline to adjust from
                                 elif field == "pref_property_type" and direction == "narrower":
                                     if buyer.pref_property_type != "Land":
                                         buyer.pref_property_type = None  # Reset to both
@@ -422,6 +427,14 @@ async def process_reply(
                     "Failed to capture pass reason for buyer %s, deal %s: %s",
                     buyer_id, deal_id, pass_err, exc_info=True,
                 )
+                try:
+                    await db.rollback()
+                except Exception as rb_err:
+                    logger.error(
+                        "Rollback failed after pass reason capture error "
+                        "for buyer %s, deal %s: %s",
+                        buyer_id, deal_id, rb_err, exc_info=True,
+                    )
 
         return {
             "reply_intent": primary_intent,
