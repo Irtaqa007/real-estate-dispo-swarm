@@ -664,10 +664,12 @@ async def mark_deal_paid(
         deal.status = "Sold"
     db.add(deal)
 
-    # Recalculate my_payout using actual payment amount
+    # Recalculate payouts using actual payment amount
     split_pct = float(deal.jv_split_percentage or 50) / 100
     actual_net_spread = payment_amount - float(deal.contract_price)
-    my_payout = actual_net_spread * (1.0 - split_pct)
+    jv_payout = actual_net_spread * split_pct
+    my_payout = actual_net_spread - jv_payout
+    deal.jv_payout = jv_payout
     deal.my_payout = my_payout
     deal.net_spread = actual_net_spread
     db.add(deal)
