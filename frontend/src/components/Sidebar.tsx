@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight, AlertTriangle } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -11,10 +12,34 @@ const navItems = [
   { href: "/deals", label: "Deals", icon: Building2 },
   { href: "/jv-partners", label: "JV Partners", icon: Activity },
   { href: "/campaigns", label: "Campaigns", icon: Send },
+  { href: "/failed-sends", label: "Failed Sends", icon: AlertTriangle },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [failedCount, setFailedCount] = useState<number | null>(null);
+
+  // Fetch unresolved failed campaign count
+  const fetchFailedCount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/failed-campaigns");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setFailedCount(data.filter((e: any) => !e.resolved).length);
+        }
+      }
+    } catch {
+      // Silently fail — don't break the sidebar
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchFailedCount();
+    // Refresh every 60s
+    const interval = setInterval(fetchFailedCount, 60000);
+    return () => clearInterval(interval);
+  }, [fetchFailedCount]);
 
   return (
     <aside className="w-60 shrink-0 border-r border-slate-800/50 bg-slate-900/50 backdrop-blur-sm flex flex-col">
@@ -52,7 +77,15 @@ export default function Sidebar() {
                 isActive ? "" : "group-hover:scale-110"
               }`} />
               <span>{item.label}</span>
-              {isActive && (
+              {item.href === "/failed-sends" && failedCount !== null && failedCount > 0 && (
+                <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white bg-red-500 shadow-sm shadow-red-500/50">
+                  {failedCount > 99 ? "99+" : failedCount}
+                </span>
+              )}
+              {isActive && item.href !== "/failed-sends" && (
+                <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
+              )}
+              {isActive && item.href === "/failed-sends" && !(failedCount !== null && failedCount > 0) && (
                 <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
               )}
             </Link>

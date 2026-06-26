@@ -314,6 +314,36 @@ class FailedCampaign(Base):
         return f"<FailedCampaign(id={self.id}, campaign_id={self.campaign_id}, retry_count={self.retry_count})>"
 
 
+class BuyerReengagementSchedule(Base):
+    """Tracks buyers who indicated they'd be ready to buy at a future date.
+
+    When a buyer says "I'll be ready in September" or "check back in 3 months",
+    this table stores the extracted target date, the raw statement, and context
+    so the scheduler can fire a re-engagement email at the right time.
+    """
+
+    __tablename__ = "buyer_reengagement_schedule"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id"), nullable=False, index=True)
+    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=True)
+    stated_window_raw = Column(Text, nullable=False)
+    target_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    context_summary = Column(Text, nullable=True)
+    status = Column(Text, default="waiting", index=True)  # waiting, fired, cancelled, no_deal_found
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    fired_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancellation_reason = Column(Text, nullable=True)
+
+    # Relationships
+    buyer = relationship("Buyer")
+    deal = relationship("Deal")
+
+    def __repr__(self) -> str:
+        return f"<BuyerReengagementSchedule(id={self.id}, buyer={self.buyer_id}, target={self.target_date})>"
+
+
 class AppState(Base):
     """Persistent key-value store for in-memory subsystem state.
 

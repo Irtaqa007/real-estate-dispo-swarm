@@ -535,6 +535,9 @@ class FailedCampaignResponse(BaseModel):
     last_retry_at: Optional[datetime] = None
     resolved: bool = False
     created_at: datetime
+    campaign_subject: Optional[str] = None
+    buyer_email: Optional[str] = None
+    buyer_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -673,5 +676,28 @@ class DealResponse(DealFields):
     drive_archive_folder_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Buyer Reengagement schemas
+# ---------------------------------------------------------------------------
+
+
+class BuyerReengagementScheduleResponse(BaseModel):
+    """Schema for a buyer reengagement schedule entry."""
+
+    id: UUID
+    buyer_id: UUID
+    deal_id: Optional[UUID] = None
+    stated_window_raw: str
+    target_date: datetime
+    context_summary: Optional[str] = None
+    status: str = "waiting"
+    created_at: datetime
+    fired_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancellation_reason: Optional[str] = None
 
     model_config = {"from_attributes": True}

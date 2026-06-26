@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.schemas import FailedCampaign
+from app.models.schemas import Buyer, Campaign, FailedCampaign
 from app.schemas import FailedCampaignResponse, FailedCampaignRetryResponse
 from app.services.dead_letter_queue import retry_failed_campaign
 
@@ -42,7 +42,36 @@ async def list_failed_campaigns(
         .options(selectinload(FailedCampaign.campaign))
     )
     entries = result.scalars().all()
-    return entries
+
+    # Enrich with campaign subject, buyer email, and buyer name
+    enriched = []
+    for entry in entries:
+        campaign = entry.campaign
+        campaign_subject = campaign.subject if campaign else None
+        buyer_email = None
+        buyer_name = None
+        if campaign:
+            buyer = await db.get(Buyer, campaign.buyer_id)
+            if buyer:
+                buyer_email = buyer.email
+                buyer_name = buyer.full_name
+
+        # Build response dict with extra fields
+        resp = FailedCampaignResponse(
+            id=entry.id,
+            campaign_id=entry.campaign_id,
+            error_message=entry.error_message,
+            retry_count=entry.retry_count,
+            last_retry_at=entry.last_retry_at,
+            resolved=entry.resolved,
+            created_at=entry.created_at,
+            campaign_subject=campaign_subject,
+            buyer_email=buyer_email,
+            buyer_name=buyer_name,
+        )
+        enriched.append(resp)
+
+    return enriched
 
 
 @router.post("/{entry_id}/retry", response_model=FailedCampaignRetryResponse)

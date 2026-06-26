@@ -21,12 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.schemas import Buyer, Campaign, Deal, JVPartner
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.services.ai_validator import validate_ai_output
 from app.services.audit_logger import audit
 from app.services.groq_client import groq_chat_completion
 from app.services.pass_reason_extractor import extract_pass_reason
+from app.models.schemas import BuyerReengagementSchedule
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +467,29 @@ async def process_reply(
                     "with unvalidated content: %s", val_err,
                 )
 
+        # ── Future buying window detection ──
+        # Runs on every reply regardless of primary intent
+        if db is not None and buyer_id is not None:
+            try:
+                reengagement_result = await detect_future_buying_window(
+                    reply_body=body,
+                    thread_context=full_context,
+                    buyer_id=buyer_id,
+                    deal_id=deal_id,
+                    db=db,
+                )
+                if reengagement_result:
+                    logger.info(
+                        "Future buying window detected for buyer %s: target=%s (stated: '%s')",
+                        buyer_id, reengagement_result["target_date"],
+                        reengagement_result["stated_window_raw"],
+                    )
+            except Exception as re_err:
+                logger.warning(
+                    "Future buying window detection failed for buyer %s: %s",
+                    buyer_id, re_err, exc_info=True,
+                )
+
         return {
             "reply_intent": primary_intent,
             "primary_intent": primary_intent,
@@ -900,3 +924,174 @@ async def load_buyer_full_context(
         "other_active_deals": other_active_deals,
         "total_active_deals": 1 + len(other_active_deals),
     }
+
+
+# ---------------------------------------------------------------------------
+# Future buying window detection
+# ---------------------------------------------------------------------------
+
+
+_DETECTION_SYSTEM_PROMPT = (
+    "You are a real estate assistant that extracts future buying intent from buyer replies. "
+    "Respond ONLY in JSON."
+)
+
+_DETECTION_USER_PROMPT_TEMPLATE = """Does this message contain a signal that the buyer intends
+to buy in the future but not right now? Look for:
+- Specific months or quarters ('September', 'Q4', 'next year')
+- Relative timeframes ('in 3 months', 'after summer', 'early next year')
+- Conditional timing ('once I sell my current property', 'when my lease ends')
+
+If a future buying signal exists, extract it.
+If no signal, return null.
+
+Respond ONLY in JSON:
+{{
+  'has_future_signal': true/false,
+  'stated_window_raw': 'exact words from message',
+  'target_date': 'YYYY-MM-DD or null if only relative',
+  'target_month': 'YYYY-MM or null',
+  'confidence': 'high/medium/low'
+}}
+If has_future_signal is false, return:
+{{'has_future_signal': false}}
+
+MESSAGE:
+{reply_body}"""
+
+
+async def detect_future_buying_window(
+    reply_body: str,
+    thread_context: Optional[list] = None,
+    buyer_id: Optional[uuid.UUID] = None,
+    deal_id: Optional[uuid.UUID] = None,
+    db: Optional[AsyncSession] = None,
+) -> Optional[dict]:
+    """Detect if a buyer signals a future buying window in their reply.
+
+    Uses llama-3.1-8b-instant for speed. If a future signal is detected
+    with sufficient confidence, creates a BuyerReengagementSchedule record.
+
+    Args:
+        reply_body: The buyer's reply text.
+        thread_context: Optional full buyer context dict from load_buyer_full_context().
+        buyer_id: Buyer UUID (required for creating schedule).
+        deal_id: Optional deal UUID.
+        db: Database session (required for creating schedule).
+
+    Returns:
+        dict with keys {stated_window_raw, target_date, confidence} if signal detected,
+        None if no signal or confidence too low.
+    """
+    if not reply_body or not reply_body.strip():
+        return None
+
+    user_prompt = _DETECTION_USER_PROMPT_TEMPLATE.format(reply_body=reply_body)
+
+    messages = [
+        {"role": "system", "content": _DETECTION_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        response = await groq_chat_completion(
+            messages=messages,
+            model="llama-3.1-8b-instant",
+            temperature=0.2,
+            max_tokens=200,
+        )
+        content = response.choices[0].message.content.strip()
+
+        # Strip markdown code fences
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(
+                line for line in lines if not line.strip().startswith("```")
+            )
+
+        parsed = json.loads(content)
+
+        if not parsed.get("has_future_signal"):
+            return None
+
+        confidence = (parsed.get("confidence") or "low").strip().lower()
+        if confidence == "low":
+            logger.debug(
+                "Future buying signal detected but confidence=low for buyer %s: %s",
+                buyer_id, parsed.get("stated_window_raw", ""),
+            )
+            return None
+
+        stated_raw = (parsed.get("stated_window_raw") or "").strip()
+        if not stated_raw:
+            return None
+
+        # Resolve target_date
+        target_date_str = parsed.get("target_date")
+        target_month_str = parsed.get("target_month")
+        now = datetime.now(timezone.utc)
+        resolved_date: Optional[datetime] = None
+
+        if target_date_str:
+            try:
+                resolved_date = datetime.strptime(target_date_str, "%Y-%m-%d")
+                resolved_date = resolved_date.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        if resolved_date is None and target_month_str:
+            try:
+                dt = datetime.strptime(target_month_str, "%Y-%m")
+                resolved_date = dt.replace(day=1, tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        if resolved_date is None:
+            # Relative timeframe — default to 3 months from now
+            # as a safe fallback
+            resolved_date = now + timedelta(days=90)
+
+        # Ensure target_date is in the future
+        if resolved_date <= now:
+            # If the resolved date is today or past, push to next month
+            resolved_date = now + timedelta(days=30)
+
+        # Create BuyerReengagementSchedule record
+        if db is not None and buyer_id is not None:
+            try:
+                context_summary = reply_body[:200]
+                schedule_entry = BuyerReengagementSchedule(
+                    id=uuid.uuid4(),
+                    buyer_id=buyer_id,
+                    deal_id=deal_id,
+                    stated_window_raw=stated_raw,
+                    target_date=resolved_date,
+                    context_summary=context_summary,
+                    status="waiting",
+                )
+                db.add(schedule_entry)
+                await db.flush()
+            except Exception as create_err:
+                logger.warning(
+                    "Failed to create reengagement schedule for buyer %s: %s",
+                    buyer_id, create_err, exc_info=True,
+                )
+
+        return {
+            "stated_window_raw": stated_raw,
+            "target_date": resolved_date,
+            "confidence": confidence,
+        }
+
+    except json.JSONDecodeError as e:
+        logger.warning(
+            "Failed to parse future buying window detection JSON: %s\nResponse: %.200s",
+            e, content if 'content' in locals() else "(no response)",
+        )
+        return None
+    except Exception as e:
+        logger.warning(
+            "Future buying window detection failed for buyer %s: %s",
+            buyer_id, e, exc_info=True,
+        )
+        return None
