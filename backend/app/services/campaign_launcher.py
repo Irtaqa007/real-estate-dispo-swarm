@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import Campaign, Deal, QueuedDealMatch
 from app.services.email_generator import generate_touch_email, TOUCH_CONFIGS
+from app.services.ai_validator import ValidationResult, validate_ai_output
 from app.services.gmail_service import send_email
 from app.services.buyer_scoring import (
     assess_buyer_eligibility,
@@ -218,15 +219,38 @@ async def launch_campaign_for_buyer(
         # Send touch 1 immediately (A-List only)
         if touch_num == 1 and touch_status == "Sent":
             try:
-                await send_email(
-                    to=buyer.email,
-                    subject=email_data.get("subject", ""),
-                    body=email_data.get("body", ""),
-                    campaign_id=campaign_record.id.hex,
-                    send_type="campaign",
-                )
-                campaign_record.sent_at = datetime.now(timezone.utc)
-                await increment_pitch_count(db, buyer)
+                # ── AI Validation pre-send guard ──
+                try:
+                    validation = await validate_ai_output(
+                        content=email_data.get("body", ""),
+                        content_type="campaign_email",
+                        deal=deal,
+                        buyer=buyer,
+                    )
+                except Exception as val_err:
+                    logger.error(
+                        "AI validator failed for touch 1, proceeding with unvalidated send: %s",
+                        val_err,
+                    )
+                    validation = ValidationResult(severity="pass", corrected_content=None, violations=[], checks_run=[])
+
+                if validation.severity == "block":
+                    logger.error(
+                        "Campaign email blocked by validator for buyer %s, deal %s: %s",
+                        buyer_id, deal_id, validation.violations,
+                    )
+                    campaign_record.status = "Queued"
+                else:
+                    body_to_send = validation.corrected_content or email_data.get("body", "")
+                    await send_email(
+                        to=buyer.email,
+                        subject=email_data.get("subject", ""),
+                        body=body_to_send,
+                        campaign_id=campaign_record.id.hex,
+                        send_type="campaign",
+                    )
+                    campaign_record.sent_at = datetime.now(timezone.utc)
+                    await increment_pitch_count(db, buyer)
             except Exception as e:
                 logger.warning(
                     "Failed to auto-send touch 1 for buyer %s: %s",

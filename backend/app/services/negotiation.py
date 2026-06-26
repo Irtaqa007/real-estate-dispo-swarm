@@ -12,6 +12,7 @@ from typing import Optional
 
 from app.config import settings
 from app.models.schemas import Deal
+from app.services.ai_validator import ValidationResult, validate_ai_output
 from app.services.groq_client import groq_chat_completion
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,24 @@ async def handle_counter_offer(
             deal=deal,
             counter_price=counter_price,
         )
+
+        # ── AI Validation pre-send guard ──
+        try:
+            validation = await validate_ai_output(
+                content=response_text,
+                content_type="negotiation_email",
+                deal=deal,
+            )
+        except Exception as val_err:
+            logger.error(
+                "AI validator failed for negotiation approval response, proceeding: %s",
+                val_err,
+            )
+            validation = ValidationResult(severity="pass", corrected_content=None, violations=[], checks_run=[])
+
+        if validation.severity != "block":
+            response_text = validation.corrected_content or response_text
+
         return {
             "action": "auto_approved",
             "ai_response": response_text,
@@ -77,6 +96,24 @@ async def handle_counter_offer(
             deal=deal,
             counter_price=counter_price,
         )
+
+        # ── AI Validation pre-send guard ──
+        try:
+            validation = await validate_ai_output(
+                content=response_text,
+                content_type="negotiation_email",
+                deal=deal,
+            )
+        except Exception as val_err:
+            logger.error(
+                "AI validator failed for negotiation deferral response, proceeding: %s",
+                val_err,
+            )
+            validation = ValidationResult(severity="pass", corrected_content=None, violations=[], checks_run=[])
+
+        if validation.severity != "block":
+            response_text = validation.corrected_content or response_text
+
         return {
             "action": "needs_manual_review",
             "ai_response": response_text,

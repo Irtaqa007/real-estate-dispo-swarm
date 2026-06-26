@@ -37,6 +37,7 @@ from app.services.state_persistence import (
     save_gmail_daily_sends,
 )
 from app.services.ghost_recovery import generate_ghost_recovery_email
+from app.services.ai_validator import ValidationResult, validate_ai_output
 from app.services.circuit_breaker import gmail_circuit_breaker, get_cb_queue
 from app.services.matching_service import process_queued_matches, invalidate_queued_matches_for_buyer, match_all_active_deals
 from app.services.resilience import get_metrics, get_idempotency_store
@@ -183,10 +184,36 @@ async def process_scheduled_campaigns() -> int:
                         db.add(campaign)
                         continue
 
+                    # ── AI Validation pre-send guard ──
+                    try:
+                        validation = await validate_ai_output(
+                            content=campaign.body,
+                            content_type="campaign_email",
+                            deal=deal,
+                            buyer=buyer,
+                        )
+                    except Exception as val_err:
+                        logger.error(
+                            "AI validator failed for campaign %s, proceeding with unvalidated send: %s",
+                            campaign.id, val_err,
+                        )
+                        validation = ValidationResult(severity="pass", corrected_content=None, violations=[], checks_run=[])
+
+                    if validation.severity == "block":
+                        logger.error(
+                            "Scheduler: campaign %s (touch %d) blocked by validator: %s",
+                            campaign.id, campaign.touch_number, validation.violations,
+                        )
+                        campaign.status = "Failed"
+                        db.add(campaign)
+                        continue
+
+                    body_to_send = validation.corrected_content or campaign.body
+
                     result = await send_email(
                         to=buyer.email,
                         subject=campaign.subject,
-                        body=campaign.body,
+                        body=body_to_send,
                         campaign_id=campaign.id.hex,
                         send_type="campaign",
                     )
@@ -992,11 +1019,36 @@ async def send_ghost_recovery_emails() -> int:
                         thread_context=thread_campaigns,
                     )
 
+                    # ── AI Validation pre-send guard ──
+                    try:
+                        validation = await validate_ai_output(
+                            content=email_data["body"],
+                            content_type="ghost_recovery_email",
+                            deal=deal,
+                            buyer=buyer,
+                        )
+                    except Exception as val_err:
+                        logger.error(
+                            "AI validator failed for ghost recovery, proceeding with unvalidated send: %s",
+                            val_err,
+                        )
+                        validation = ValidationResult(severity="pass", corrected_content=None, violations=[], checks_run=[])
+
+                    if validation.severity == "block":
+                        logger.error(
+                            "Ghost recovery email blocked by validator for buyer %s, deal %s: %s",
+                            campaign.buyer_id, campaign.deal_id, validation.violations,
+                        )
+                        # Do NOT increment ghost_recovery_touch — will retry next cycle
+                        continue
+
+                    body_to_send = validation.corrected_content or email_data["body"]
+
                     # Send via send_email with send_type="reply" (never blocked by daily cap)
                     result = await send_email(
                         to=buyer.email,
                         subject=email_data["subject"],
-                        body=email_data["body"],
+                        body=body_to_send,
                         campaign_id=campaign.id.hex,
                         send_type="reply",
                     )
