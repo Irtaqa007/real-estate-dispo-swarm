@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.services.ai_validator import validate_ai_output
 from app.services.audit_logger import audit
+from app.services.gmail_service import send_email
 from app.services.groq_client import groq_chat_completion
 from app.services.pass_reason_extractor import extract_pass_reason
 from app.models.schemas import BuyerReengagementSchedule
@@ -523,6 +524,96 @@ async def process_reply(
                     if deal_obj.status not in ("Under Contract", "Sold"):
                         deal_obj.status = "Under Contract"
                         db.add(deal_obj)
+
+                    # ── Notify other active buyers on same deal ──
+                    # Send holding emails to all OTHER buyers still being pitched,
+                    # then pause their campaigns. This is non-blocking — failure
+                    # here must not prevent the contract alert from being created.
+                    try:
+                        other_campaigns_result = await db.execute(
+                            select(Campaign)
+                            .where(
+                                Campaign.deal_id == deal_id,
+                                Campaign.buyer_id != buyer_id,
+                                Campaign.status.in_(["Sent", "Replied", "Queued"]),
+                            )
+                        )
+                        other_campaigns = other_campaigns_result.scalars().all()
+
+                        notified_ids = set()
+                        for other_c in other_campaigns:
+                            other_buyer_id = other_c.buyer_id
+                            if other_buyer_id in notified_ids:
+                                continue
+                            notified_ids.add(other_buyer_id)
+
+                            try:
+                                other_buyer = await db.get(Buyer, other_buyer_id)
+                                if not other_buyer or not other_buyer.email or other_buyer.unsubscribed_at:
+                                    continue
+
+                                holding_body = (
+                                    f"Hi {other_buyer.full_name},\n\n"
+                                    f"Just a quick update — we've received strong interest on this "
+                                    f"property and have moved to contract with another buyer. "
+                                    f"We'll keep you posted if anything changes.\n\n"
+                                    f"Appreciate your time and we'll be in touch when the next "
+                                    f"deal comes through.\n\n"
+                                    f"{settings.operator_email_signature}"
+                                )
+
+                                # Validate via AI validator
+                                try:
+                                    validation = await validate_ai_output(
+                                        content=holding_body,
+                                        content_type="reply_email",
+                                        deal=deal_obj,
+                                        buyer=other_buyer,
+                                    )
+                                    if validation.severity == "block":
+                                        logger.warning(
+                                            "Holding email blocked by validator for buyer %s, skipping",
+                                            other_buyer_id,
+                                        )
+                                        continue
+                                    holding_body = (
+                                        validation.corrected_content or holding_body
+                                    )
+                                except Exception:
+                                    pass
+
+                                await send_email(
+                                    to=other_buyer.email,
+                                    subject=f"Update on {deal_obj.address}",
+                                    body=holding_body,
+                                    send_type="reply",
+                                )
+
+                                # Pause this other buyer's active campaigns for this deal
+                                other_c.status = "Paused"
+                                db.add(other_c)
+
+                                logger.info(
+                                    "Holding email sent to buyer %s for deal %s "
+                                    "(deal moved to Under Contract)",
+                                    other_buyer_id, deal_id,
+                                )
+                            except Exception as notify_err:
+                                logger.warning(
+                                    "Failed to notify buyer %s about deal %s closing: %s",
+                                    other_buyer_id, deal_id, notify_err, exc_info=True,
+                                )
+
+                        if notified_ids:
+                            logger.info(
+                                "Notified %d other buyer(s) on deal %s about contract",
+                                len(notified_ids), deal_id,
+                            )
+                    except Exception as other_err:
+                        logger.warning(
+                            "Failed to notify other buyers for deal %s: %s — continuing with contract alert",
+                            deal_id, other_err, exc_info=True,
+                        )
 
                     # 3. Build contract alert metadata
                     jv_partner = None
