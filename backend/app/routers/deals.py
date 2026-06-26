@@ -18,10 +18,19 @@ from app.schemas import (
     DealCreate,
     DealResponse,
     DealUpdate,
+    MarkPaidRequest,
+    MarkPaidResponse,
+    RevenueDashboardResponse,
+    RevenueDealItem,
     UnderContractRequest,
 )
 from app.services.embeddings import generate_embedding
-from app.services.google_drive import upload_multiple
+from app.services.google_drive import (
+    archive_deal_folder,
+    get_or_create_archive_folder,
+    revoke_shared_links,
+    upload_multiple,
+)
 from app.services.deal_dedup import check_deal_duplicate
 from app.services.matching_service import trigger_release_for_deal_async
 from app.services.zip_lookup import lookup_zip
@@ -110,7 +119,16 @@ async def create_deal(
         narrative=_build_deal_narrative(deal),
     )
 
-    logger.info("Deal %s created — embedding queued in background", deal.id)
+    # Create Drive deal folder in background
+    background_tasks.add_task(
+        _create_drive_folder_background,
+        deal_id=deal.id,
+        address=deal.address,
+        city=deal.city or "",
+        state=deal.state or "",
+    )
+
+    logger.info("Deal %s created — embedding and Drive folder queued in background", deal.id)
     return deal
 
 
@@ -600,6 +618,227 @@ async def get_deal_pass_intelligence(
     }
 
 
+@router.post("/{deal_id}/mark-paid", response_model=MarkPaidResponse)
+async def mark_deal_paid(
+    deal_id: uuid.UUID,
+    body: MarkPaidRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Confirm payment received for a closed deal and archive its Drive folder.
+
+    Validates the deal is in 'Sold' or 'Under Contract' status and payment
+    hasn't already been confirmed. Archives the deal's Google Drive folder
+    to 'Closed Deals Archive' and revokes public sharing links.
+
+    Drive operations are non-blocking — payment confirmation succeeds even
+    if Drive archiving fails.
+    """
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deal with id '{deal_id}' not found",
+        )
+
+    if deal.status not in ("Sold", "Under Contract"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Deal must be in Sold or Under Contract status to confirm payment",
+        )
+
+    if deal.payment_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payment already confirmed for this deal",
+        )
+
+    now = datetime.now(timezone.utc)
+    payment_amount = body.payment_amount
+
+    # Update deal payment fields
+    deal.payment_confirmed = True
+    deal.payment_confirmed_at = now
+    deal.payment_amount = payment_amount
+    if deal.status == "Under Contract":
+        deal.status = "Sold"
+    db.add(deal)
+
+    # Recalculate my_payout using actual payment amount
+    split_pct = float(deal.jv_split_percentage or 50) / 100
+    actual_net_spread = payment_amount - float(deal.contract_price)
+    my_payout = actual_net_spread * (1.0 - split_pct)
+    deal.my_payout = my_payout
+    deal.net_spread = actual_net_spread
+    db.add(deal)
+
+    # ── Drive archive operations (non-blocking) ──
+    drive_archived = False
+    drive_archived_at = None
+    drive_archive_folder_id = None
+    shared_links_revoked = 0
+
+    if deal.drive_folder_id:
+        try:
+            import asyncio
+            from googleapiclient.discovery import build
+            from app.services.google_drive import _get_credentials
+
+            creds = await asyncio.to_thread(_get_credentials)
+            drive_service = build("drive", "v3", credentials=creds)
+
+            archive_result = await archive_deal_folder(
+                drive_service=drive_service,
+                deal_folder_id=deal.drive_folder_id,
+                deal_address=deal.address,
+            )
+
+            if archive_result["success"]:
+                drive_archived = True
+                drive_archived_at = now
+                drive_archive_folder_id = archive_result["archive_folder_id"]
+
+                deal.drive_archived = True
+                deal.drive_archived_at = now
+                deal.drive_archive_folder_id = drive_archive_folder_id
+                db.add(deal)
+
+                # Revoke shared links on archived folder
+                shared_links_revoked = await revoke_shared_links(
+                    drive_service=drive_service,
+                    folder_id=deal.drive_folder_id,
+                )
+            else:
+                logger.warning(
+                    "Drive archive failed for deal %s: %s",
+                    deal_id, archive_result.get("error"),
+                )
+        except Exception as e:
+            logger.warning(
+                "Drive archive error for deal %s (payment still confirmed): %s",
+                deal_id, e, exc_info=True,
+            )
+    else:
+        logger.warning(
+            "Deal %s has no drive_folder_id — skipping Drive archive",
+            deal_id,
+        )
+
+    # Log to activity_log
+    log_entry = ActivityLog(
+        id=uuid.uuid4(),
+        entity_type="deal",
+        entity_id=deal.id,
+        action="payment_confirmed",
+        metadata_json={
+            "deal_id": str(deal_id),
+            "address": deal.address,
+            "payment_amount": float(payment_amount),
+            "my_payout": float(my_payout),
+            "drive_archived": drive_archived,
+            "shared_links_revoked": shared_links_revoked,
+            "alert_user": False,
+        },
+    )
+    db.add(log_entry)
+
+    await db.commit()
+    await db.refresh(deal)
+
+    logger.info(
+        "Payment confirmed for deal %s ($%.2f) — drive_archived=%s, links_revoked=%d",
+        deal_id, payment_amount, drive_archived, shared_links_revoked,
+    )
+
+    return MarkPaidResponse(
+        deal_id=deal.id,
+        address=deal.address,
+        payment_confirmed=True,
+        payment_confirmed_at=now,
+        payment_amount=float(payment_amount),
+        drive_archived=drive_archived,
+        drive_archived_at=drive_archived_at,
+        drive_archive_folder_id=drive_archive_folder_id,
+        shared_links_revoked=shared_links_revoked,
+        message="Payment confirmed and deal folder archived.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Revenue dashboard endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get("/dashboard/revenue", response_model=RevenueDashboardResponse)
+async def revenue_dashboard(
+    db: AsyncSession = Depends(get_db),
+):
+    """Get revenue dashboard data.
+
+    Returns all deals with Sold or Under Contract status (or payment_confirmed=True),
+    aggregated with confirmed vs pending payout totals.
+    """
+    result = await db.execute(
+        select(Deal)
+        .where(
+            (Deal.status.in_(["Sold", "Under Contract"]))
+            | (Deal.payment_confirmed == True)
+        )
+        .order_by(Deal.closed_at.desc().nullslast())
+    )
+    deals = result.scalars().all()
+
+    items = []
+    total_assignment_fees = 0.0
+    total_my_payout = 0.0
+    total_my_payout_confirmed = 0.0
+    total_my_payout_pending = 0.0
+
+    for deal in deals:
+        closed_price = float(deal.closed_price) if deal.closed_price else 0.0
+        net_spread = float(deal.net_spread) if deal.net_spread else 0.0
+        my_payout = float(deal.my_payout) if deal.my_payout else 0.0
+        payment_amount = float(deal.payment_amount) if deal.payment_amount else None
+
+        # Get JV partner name
+        jv_name = None
+        if deal.jv_partner_id:
+            jv = await db.get(JVPartner, deal.jv_partner_id)
+            if jv:
+                jv_name = jv.name
+
+        total_assignment_fees += net_spread
+        total_my_payout += my_payout
+
+        if deal.payment_confirmed:
+            total_my_payout_confirmed += payment_amount or my_payout
+        elif deal.status == "Sold":
+            total_my_payout_pending += my_payout
+
+        items.append(RevenueDealItem(
+            deal_id=deal.id,
+            address=deal.address,
+            closed_at=deal.closed_at,
+            closed_price=closed_price,
+            net_spread=net_spread,
+            my_payout=my_payout,
+            payment_confirmed=deal.payment_confirmed or False,
+            payment_confirmed_at=deal.payment_confirmed_at,
+            payment_amount=payment_amount,
+            jv_partner_name=jv_name,
+            status=deal.status,
+        ))
+
+    return RevenueDashboardResponse(
+        total_deals_closed=len(items),
+        total_assignment_fees=round(total_assignment_fees, 2),
+        total_my_payout=round(total_my_payout, 2),
+        total_my_payout_confirmed=round(total_my_payout_confirmed, 2),
+        total_my_payout_pending=round(total_my_payout_pending, 2),
+        deals=items,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -622,6 +861,50 @@ _EMBEDDING_AFFECTING_FIELDS = frozenset({
     "city", "lot_size", "zoning", "condition_description",
     "arv", "asking_price",
 })
+
+
+async def _create_drive_folder_background(
+    deal_id: uuid.UUID,
+    address: str,
+    city: str,
+    state: str,
+) -> None:
+    """Create a Google Drive folder for the deal in the background.
+
+    Runs as a FastAPI BackgroundTask so deal creation is not blocked
+    by the Drive API call. Stores the folder ID on the deal record.
+    """
+    try:
+        from app.database import async_session_factory
+        from app.services.google_drive import _get_credentials, _ensure_deal_folder
+        from googleapiclient.discovery import build
+        import asyncio
+
+        folder_name = f"{state} — SFR — {address} — {deal_id.hex[:8]}"
+
+        def _create_folder() -> str:
+            """Synchronous: get creds, build service, ensure folder exists."""
+            creds = _get_credentials()
+            service = build("drive", "v3", credentials=creds)
+            return _ensure_deal_folder(service, folder_name)
+
+        folder_id = await asyncio.to_thread(_create_folder)
+
+        if folder_id:
+            async with async_session_factory() as db:
+                deal = await db.get(Deal, deal_id)
+                if deal:
+                    deal.drive_folder_id = folder_id
+                    await db.commit()
+                    logger.info(
+                        "Created Drive folder for deal %s: %s (id=%s)",
+                        deal_id, folder_name, folder_id,
+                    )
+    except Exception as e:
+        logger.warning(
+            "Failed to create Drive folder for deal %s: %s",
+            deal_id, e, exc_info=True,
+        )
 
 
 async def _generate_deal_embedding_background(deal_id: uuid.UUID, narrative: str) -> None:

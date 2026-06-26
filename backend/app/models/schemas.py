@@ -176,6 +176,15 @@ class Deal(Base):
     priority_score = Column(Float, default=0)
     market_velocity = Column(Float, default=0)
     spread = Column(Numeric(19, 2), Computed("asking_price - contract_price"), nullable=True)
+    # Payment confirmation fields
+    payment_confirmed = Column(Boolean, default=False)
+    payment_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    payment_amount = Column(Numeric(19, 2), nullable=True)
+    # Drive archive fields
+    drive_folder_id = Column(Text, nullable=True)
+    drive_archived = Column(Boolean, default=False)
+    drive_archived_at = Column(DateTime(timezone=True), nullable=True)
+    drive_archive_folder_id = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

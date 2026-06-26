@@ -575,3 +575,103 @@ class NegotiationResponse(BaseModel):
     floor_price: float
     auto_approved: bool
     contract_price: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# Payment confirmation & Drive cleanup schemas
+# ---------------------------------------------------------------------------
+
+
+class MarkPaidRequest(BaseModel):
+    """Schema for confirming payment on a closed deal."""
+
+    payment_amount: float = Field(..., gt=0, description="Actual amount received")
+    notes: Optional[str] = Field(None, max_length=500, description="Optional payment notes")
+
+
+class MarkPaidResponse(BaseModel):
+    """Response after confirming payment and archiving Drive folder."""
+
+    deal_id: UUID
+    address: str
+    payment_confirmed: bool = True
+    payment_confirmed_at: Optional[datetime] = None
+    payment_amount: Optional[float] = None
+    drive_archived: bool = False
+    drive_archived_at: Optional[datetime] = None
+    drive_archive_folder_id: Optional[str] = None
+    shared_links_revoked: int = 0
+    message: str = "Payment confirmed and deal folder archived."
+
+
+class RevenueDealItem(BaseModel):
+    """A single deal in the revenue dashboard."""
+
+    deal_id: UUID
+    address: str
+    closed_at: Optional[datetime] = None
+    closed_price: Optional[float] = None
+    net_spread: Optional[float] = None
+    my_payout: Optional[float] = None
+    payment_confirmed: bool = False
+    payment_confirmed_at: Optional[datetime] = None
+    payment_amount: Optional[float] = None
+    jv_partner_name: Optional[str] = None
+    status: str
+
+
+class RevenueDashboardResponse(BaseModel):
+    """Revenue dashboard aggregation."""
+
+    total_deals_closed: int = 0
+    total_assignment_fees: float = 0.0
+    total_my_payout: float = 0.0
+    total_my_payout_confirmed: float = 0.0
+    total_my_payout_pending: float = 0.0
+    deals: List[RevenueDealItem] = []
+
+
+class DealResponse(DealFields):
+    """Schema for deal responses. Includes all DB-generated fields.
+
+    Inherits from DealFields (fields only, no validators) rather than
+    DealBase, so existing rows that predate a validation rule -- or
+    have any null/incomplete field for any reason -- can still be
+    read back successfully. Validation belongs on create/update, not
+    on read.
+
+    Several fields that are required on DealCreate are re-declared as
+    Optional here for the same reason: a response schema should
+    reflect what's actually in the database, not reject rows that
+    don't (yet, or anymore) fully satisfy input-time rules.
+    """
+
+    id: UUID
+    property_type: Optional[str] = None
+    condition_description: Optional[str] = None
+    arv: Optional[float] = None
+    asking_price: Optional[float] = None
+    floor_price: Optional[float] = None
+    contract_price: Optional[float] = None
+    title_status: Optional[str] = None
+    status: str = "Available"
+    assigned_buyer_id: Optional[UUID] = None
+    jv_partner_id: Optional[UUID] = None
+    spread: Optional[float] = None
+    priority_score: Optional[float] = 0.0
+    closed_at: Optional[datetime] = None
+    closed_price: Optional[float] = None
+    net_spread: Optional[float] = None
+    jv_payout: Optional[float] = None
+    my_payout: Optional[float] = None
+    payment_confirmed: bool = False
+    payment_confirmed_at: Optional[datetime] = None
+    payment_amount: Optional[float] = None
+    drive_folder_id: Optional[str] = None
+    drive_archived: bool = False
+    drive_archived_at: Optional[datetime] = None
+    drive_archive_folder_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
