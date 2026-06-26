@@ -472,28 +472,107 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                 except Exception as q_err:
                     logger.warning("Failed to log escalation for campaign %s: %s", campaign.id, q_err, exc_info=True)
 
-        # 10b. Auto-send assignment contract if buyer is Interested
-        assignment_sent = False
+        # 10b. Interested buyer → notify other active buyers on same deal
+        # The contract alert is created inside process_reply(). Here we send
+        # holding emails to all OTHER buyers still being pitched on this deal.
         if classification["reply_intent"] == "Interested":
             try:
                 deal = await db.get(Deal, campaign.deal_id)
-                if deal and buyer_obj:
-                    contract_result = await send_assignment_contract(
-                        db=db,
-                        deal=deal,
-                        buyer_name=buyer_obj.full_name,
-                        buyer_email=buyer_obj.email,
-                    )
-                    assignment_sent = contract_result.get("sent", False)
-                    if assignment_sent:
-                        logger.info(
-                            "Assignment contract sent to %s for deal %s",
-                            buyer_obj.email, deal.address,
+                if deal:
+                    # Find other active campaigns for same deal (exclude closing buyer)
+                    other_campaigns_result = await db.execute(
+                        select(Campaign)
+                        .where(
+                            Campaign.deal_id == campaign.deal_id,
+                            Campaign.buyer_id != buyer_id,
+                            Campaign.status.in_(["Sent", "Replied"]),
                         )
+                    )
+                    other_campaigns = other_campaigns_result.scalars().all()
+
+                    # De-duplicate by buyer_id
+                    notified_buyer_ids = set()
+                    for other_c in other_campaigns:
+                        other_buyer_id = other_c.buyer_id
+                        if other_buyer_id in notified_buyer_ids:
+                            continue
+                        notified_buyer_ids.add(other_buyer_id)
+
+                        try:
+                            other_buyer = await db.get(Buyer, other_buyer_id)
+                            if not other_buyer or not other_buyer.email:
+                                continue
+                            if other_buyer.unsubscribed_at:
+                                continue
+
+                            # Generate brief holding email
+                            holding_body = (
+                                f"Hi {other_buyer.full_name},\n\n"
+                                f"Quick update on {deal.address} — we've received strong interest "
+                                f"on this property and have moved to contract with another buyer. "
+                                f"We'll keep you posted if anything changes — appreciate your time.\n\n"
+                                f"{settings.operator_email_signature}"
+                            )
+
+                            # Validate via AI validator
+                            try:
+                                from app.services.ai_validator import validate_ai_output
+                                validation = await validate_ai_output(
+                                    content=holding_body,
+                                    content_type="reply_email",
+                                    deal=deal,
+                                    buyer=other_buyer,
+                                )
+                                if validation.severity != "block":
+                                    holding_body = (
+                                        validation.corrected_content or holding_body
+                                    )
+                            except Exception:
+                                pass
+
+                            await send_email(
+                                to=other_buyer.email,
+                                subject=f"Update on {deal.address}",
+                                body=holding_body,
+                                campaign_id=campaign.id.hex,
+                                send_type="reply",
+                            )
+
+                            # Pause their remaining queued campaigns for this deal
+                            queued_other = await db.execute(
+                                select(Campaign)
+                                .where(
+                                    Campaign.buyer_id == other_buyer_id,
+                                    Campaign.deal_id == campaign.deal_id,
+                                    Campaign.status == "Queued",
+                                )
+                            )
+                            for qc in queued_other.scalars().all():
+                                qc.status = "Paused"
+                                db.add(qc)
+
+                            logger.info(
+                                "Holding email sent to buyer %s for deal %s "
+                                "(interested buyer: %s)",
+                                other_buyer_id, campaign.deal_id, buyer_id,
+                            )
+                        except Exception as notify_err:
+                            logger.warning(
+                                "Failed to notify buyer %s about deal %s closing: %s",
+                                other_buyer_id, campaign.deal_id, notify_err,
+                                exc_info=True,
+                            )
+
+                    if notified_buyer_ids:
+                        logger.info(
+                            "Notified %d other buyer(s) on deal %s about closing",
+                            len(notified_buyer_ids), campaign.deal_id,
+                        )
+
             except Exception as e:
                 logger.warning(
-                    "Failed to send assignment contract for buyer %s, deal %s: %s",
-                    buyer_id, campaign.deal_id, e, exc_info=True,
+                    "Failed to notify other buyers for deal %s: %s",
+                    campaign.deal_id, e, exc_info=True,
                 )
 
         results.append(ReplyCheckItem(

@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.schemas import Buyer, Campaign, Deal, JVPartner
+from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, JVPartner
 from datetime import datetime, timedelta, timezone
 
 from app.services.ai_validator import validate_ai_output
@@ -488,6 +488,140 @@ async def process_reply(
                 logger.warning(
                     "Future buying window detection failed for buyer %s: %s",
                     buyer_id, re_err, exc_info=True,
+                )
+
+        # ── Closing intent → Contract alert ──
+        # When buyer is ready to move forward (Interested), create a dashboard
+        # alert so the operator can prepare and send the contract manually.
+        # This replaces the auto-generate-and-send contract behavior.
+        if (
+            primary_intent == "Interested"
+            and db is not None
+            and buyer_id is not None
+            and deal_id is not None
+        ):
+            try:
+                deal_obj = await db.get(Deal, deal_id)
+                buyer_obj = await db.get(Buyer, buyer_id)
+                if deal_obj and buyer_obj:
+                    # 1. Update Campaign status to Contract_Pending
+                    campaign_result = await db.execute(
+                        select(Campaign)
+                        .where(
+                            Campaign.buyer_id == buyer_id,
+                            Campaign.deal_id == deal_id,
+                        )
+                        .order_by(Campaign.sent_at.desc().nullslast())
+                        .limit(1)
+                    )
+                    campaign_row = campaign_result.scalar_one_or_none()
+                    if campaign_row:
+                        campaign_row.status = "Contract_Pending"
+                        db.add(campaign_row)
+
+                    # 2. Update Deal status to Under Contract if not already
+                    if deal_obj.status not in ("Under Contract", "Sold"):
+                        deal_obj.status = "Under Contract"
+                        db.add(deal_obj)
+
+                    # 3. Build contract alert metadata
+                    jv_partner = None
+                    if deal_obj.jv_partner_id:
+                        jv_partner = await db.get(JVPartner, deal_obj.jv_partner_id)
+
+                    asking = float(deal_obj.asking_price)
+                    contract = float(deal_obj.contract_price)
+                    split_pct = float(deal_obj.jv_split_percentage or 50) / 100
+                    assignment_fee = asking - contract
+                    my_payout = assignment_fee * (1.0 - split_pct)
+
+                    # Generate AI thread summary (best-effort)
+                    thread_summary = (
+                        f"Buyer {buyer_obj.full_name} expressed interest in "
+                        f"{deal_obj.address}. Deal details verified — "
+                        f"contract price ${contract:,.0f}, asking ${asking:,.0f}."
+                    )
+                    try:
+                        ai_summary = await _generate_contract_thread_summary(
+                            db=db,
+                            buyer_id=buyer_id,
+                            deal_id=deal_id,
+                            buyer_name=buyer_obj.full_name,
+                            deal_address=deal_obj.address,
+                        )
+                        if ai_summary:
+                            thread_summary = ai_summary
+                    except Exception:
+                        pass
+
+                    # Extract negotiated price (best-effort, falls back to asking)
+                    negotiated_price = asking
+                    try:
+                        extracted_price = await _extract_negotiated_price(
+                            db=db,
+                            buyer_id=buyer_id,
+                            deal_id=deal_id,
+                            current_asking=asking,
+                            reply_body=body,
+                        )
+                        if extracted_price is not None:
+                            negotiated_price = extracted_price
+                    except Exception:
+                        pass
+
+                    alert_metadata = {
+                        "alert_type": "contract_ready",
+                        "alert_user": True,
+                        "priority": "high",
+                        "action_required": "Prepare and send contract manually",
+                        "buyer": {
+                            "name": buyer_obj.full_name,
+                            "email": buyer_obj.email,
+                            "closes_in": buyer_obj.affiliation or "",
+                            "title_company": "",
+                            "closing_timeline": "",
+                        },
+                        "deal": {
+                            "address": deal_obj.address,
+                            "city": deal_obj.city or "",
+                            "state": deal_obj.state or "",
+                            "asking_price": asking,
+                            "floor_price": float(deal_obj.floor_price),
+                            "contract_price": contract,
+                            "assignment_fee": assignment_fee,
+                            "my_payout": my_payout,
+                            "jv_partner": jv_partner.name if jv_partner else "",
+                            "jv_partner_email": jv_partner.email if jv_partner else "",
+                        },
+                        "negotiated_price": negotiated_price,
+                        "thread_summary": thread_summary,
+                        "suggested_next_steps": [
+                            f"1. Prepare assignment contract for {deal_obj.state or 'your state'}",
+                            f"2. Send to buyer at {buyer_obj.email}",
+                            f"3. Copy JV partner {jv_partner.email if jv_partner else 'on file'} on execution",
+                            "4. Collect EMD of [standard amount for this deal type]",
+                            "5. Notify title company to open escrow",
+                        ],
+                    }
+
+                    # Create activity log entry (alert_user=True so it surfaces)
+                    await audit.log(
+                        db,
+                        entity_type="deal",
+                        entity_id=deal_id,
+                        action="contract_ready",
+                        metadata=alert_metadata,
+                    )
+
+                    logger.info(
+                        "Contract-ready alert created for buyer %s on deal %s (%s)",
+                        buyer_id, deal_id, deal_obj.address,
+                    )
+
+            except Exception as closing_err:
+                logger.warning(
+                    "Failed to create contract alert for buyer %s, deal %s: %s",
+                    buyer_id, deal_id, closing_err, exc_info=True,
                 )
 
         return {
@@ -1093,5 +1227,193 @@ async def detect_future_buying_window(
         logger.warning(
             "Future buying window detection failed for buyer %s: %s",
             buyer_id, e, exc_info=True,
+        )
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Contract alert helpers — AI thread summary & price extraction
+# ---------------------------------------------------------------------------
+
+
+async def _generate_contract_thread_summary(
+    db: AsyncSession,
+    buyer_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    buyer_name: str,
+    deal_address: str,
+) -> Optional[str]:
+    """Generate a 2-sentence summary of the last 3 exchanges for the contract alert.
+
+    Uses llama-3.1-8b-instant for speed. Best-effort — returns None on failure.
+
+    Args:
+        db: Database session.
+        buyer_id: Buyer UUID.
+        deal_id: Deal UUID.
+        buyer_name: Buyer's full name.
+        deal_address: Deal property address.
+
+    Returns:
+        2-sentence summary string, or None if generation fails.
+    """
+    try:
+        thread_result = await db.execute(
+            select(Campaign)
+            .where(
+                Campaign.buyer_id == buyer_id,
+                Campaign.deal_id == deal_id,
+            )
+            .order_by(Campaign.sent_at.desc().nullslast())
+            .limit(3)
+        )
+        thread_campaigns = list(thread_result.scalars().all())
+
+        if not thread_campaigns:
+            return None
+
+        # Build thread text from campaign rows
+        thread_lines = []
+        for c in reversed(thread_campaigns):  # chronological order
+            # A row is a buyer reply if reply_body is set, otherwise it's a sent email
+            is_reply = c.reply_body is not None
+            role = "Buyer (reply)" if is_reply else "You (sent)"
+            body_preview = (c.reply_body if is_reply else c.body or "")[:200]
+            thread_lines.append(f"{role}:"
+                                f"\nSubject: {c.subject or '(no subject)'}"
+                                f"\nBody: {body_preview}")
+
+        thread_text = "\n\n".join(thread_lines)
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You summarize email thread exchanges in 2 concise sentences. "
+                    "Focus on what the buyer wants and the key deal context. "
+                    "Respond with only the summary text, no JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Summarize this thread between {buyer_name} and a real estate "
+                    f"operator about {deal_address} in 2 sentences:\n\n{thread_text}"
+                ),
+            },
+        ]
+
+        response = await groq_chat_completion(
+            messages=messages,
+            model="llama-3.1-8b-instant",
+            temperature=0.3,
+            max_tokens=200,
+        )
+        summary = response.choices[0].message.content.strip()
+
+        if summary:
+            # Clean up any quotes or markdown
+            summary = summary.strip('"\'`')
+            return summary[:500]
+
+        return None
+    except Exception as e:
+        logger.warning(
+            "Failed to generate thread summary for buyer %s, deal %s: %s",
+            buyer_id, deal_id, e,
+        )
+        return None
+
+
+async def _extract_negotiated_price(
+    db: AsyncSession,
+    buyer_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    current_asking: float,
+    reply_body: str,
+) -> Optional[float]:
+    """Extract any negotiated/counter price from the thread context.
+
+    Checks the current reply body AND the last thread messages for counter prices.
+    Uses llama-3.1-8b-instant. Best-effort — returns None (caller falls back to asking_price).
+
+    Args:
+        db: Database session.
+        buyer_id: Buyer UUID.
+        deal_id: Deal UUID.
+        current_asking: The deal's asking price to use as context.
+        reply_body: The current reply body (may contain a counter).
+
+    Returns:
+        Negotiated price float, or None if no counter found.
+    """
+    try:
+        # Load last 3 campaign rows for thread context
+        thread_result = await db.execute(
+            select(Campaign)
+            .where(
+                Campaign.buyer_id == buyer_id,
+                Campaign.deal_id == deal_id,
+            )
+            .order_by(Campaign.sent_at.desc().nullslast())
+            .limit(3)
+        )
+        thread_campaigns = list(thread_result.scalars().all())
+
+        # Build thread text for AI context
+        thread_parts = []
+        for c in reversed(thread_campaigns):
+            text = c.reply_body if c.reply_body else c.body or ""
+            if text:
+                thread_parts.append(text[:300])
+        thread_context_text = "\n---\n".join(thread_parts)
+
+        prompt = (
+            f"Review this entire thread for any counter offer prices.\n"
+            f"Current asking price: ${current_asking:,.0f}\n\n"
+            f"THREAD HISTORY:\n{thread_context_text[:1500]}\n\n"
+            f"The latest buyer message is:\n{reply_body[:500]}\n\n"
+            f"If a counter offer or negotiated price was mentioned anywhere "
+            f"in the thread (including the latest message), return it. "
+            f"If no counter was made, return null.\n\n"
+            f"Respond JSON:\n"
+            f"{{\"has_price\": true/false, \"price\": 123456 or null}}"
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You extract pricing information from real estate messages. "
+                    "Respond ONLY in JSON format."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+
+        response = await groq_chat_completion(
+            messages=messages,
+            model="llama-3.1-8b-instant",
+            temperature=0.2,
+            max_tokens=100,
+        )
+        content = response.choices[0].message.content.strip()
+
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(line for line in lines if not line.strip().startswith("```"))
+
+        parsed = json.loads(content)
+        if parsed.get("has_price") and parsed.get("price") is not None:
+            return float(parsed["price"])
+
+        return None
+    except Exception as e:
+        logger.warning(
+            "Failed to extract negotiated price for buyer %s, deal %s: %s",
+            buyer_id, deal_id, e,
         )
         return None

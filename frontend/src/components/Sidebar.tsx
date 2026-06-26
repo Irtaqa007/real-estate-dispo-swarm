@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useCallback } from "react";
-import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight, AlertTriangle } from "lucide-react";
+import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight, AlertTriangle, FileText } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -12,12 +12,14 @@ const navItems = [
   { href: "/deals", label: "Deals", icon: Building2 },
   { href: "/jv-partners", label: "JV Partners", icon: Activity },
   { href: "/campaigns", label: "Campaigns", icon: Send },
+  { href: "/contracts", label: "Contracts", icon: FileText },
   { href: "/failed-sends", label: "Failed Sends", icon: AlertTriangle },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const [failedCount, setFailedCount] = useState<number | null>(null);
+  const [contractCount, setContractCount] = useState<number | null>(null);
 
   // Fetch unresolved failed campaign count
   const fetchFailedCount = useCallback(async () => {
@@ -34,12 +36,31 @@ export default function Sidebar() {
     }
   }, []);
 
+  // Fetch unresolved contract-ready alert count
+  const fetchContractCount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/alerts/contract-ready");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setContractCount(data.filter((a: any) => !a.resolved).length);
+        }
+      }
+    } catch {
+      // Silently fail
+    }
+  }, []);
+
   useEffect(() => {
     fetchFailedCount();
+    fetchContractCount();
     // Refresh every 60s
-    const interval = setInterval(fetchFailedCount, 60000);
+    const interval = setInterval(() => {
+      fetchFailedCount();
+      fetchContractCount();
+    }, 60000);
     return () => clearInterval(interval);
-  }, [fetchFailedCount]);
+  }, [fetchFailedCount, fetchContractCount]);
 
   return (
     <aside className="w-60 shrink-0 border-r border-slate-800/50 bg-slate-900/50 backdrop-blur-sm flex flex-col">
@@ -77,15 +98,23 @@ export default function Sidebar() {
                 isActive ? "" : "group-hover:scale-110"
               }`} />
               <span>{item.label}</span>
+              {item.href === "/contracts" && contractCount !== null && contractCount > 0 && (
+                <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white bg-amber-500 shadow-sm shadow-amber-500/50">
+                  {contractCount > 99 ? "99+" : contractCount}
+                </span>
+              )}
               {item.href === "/failed-sends" && failedCount !== null && failedCount > 0 && (
                 <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white bg-red-500 shadow-sm shadow-red-500/50">
                   {failedCount > 99 ? "99+" : failedCount}
                 </span>
               )}
-              {isActive && item.href !== "/failed-sends" && (
+              {isActive && item.href !== "/failed-sends" && item.href !== "/contracts" && (
                 <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
               )}
               {isActive && item.href === "/failed-sends" && !(failedCount !== null && failedCount > 0) && (
+                <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
+              )}
+              {isActive && item.href === "/contracts" && !(contractCount !== null && contractCount > 0) && (
                 <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
               )}
             </Link>

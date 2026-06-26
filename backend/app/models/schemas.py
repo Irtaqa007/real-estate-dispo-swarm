@@ -206,7 +206,7 @@ class Campaign(Base):
     deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=False)
     buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id"), nullable=False)
     touch_number = Column(Integer, nullable=False)  # 1 to 6
-    status = Column(Text, default="Queued")  # Queued, Sent, Opened, Replied, Bounced, Failed
+    status = Column(Text, default="Queued")  # Queued, Sent, Opened, Replied, Bounced, Failed, Contract_Pending
     sent_at = Column(DateTime(timezone=True), nullable=True)
     scheduled_send_at = Column(DateTime(timezone=True), nullable=True)
     subject = Column(Text, nullable=True)

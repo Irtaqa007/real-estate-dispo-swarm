@@ -701,3 +701,31 @@ class BuyerReengagementScheduleResponse(BaseModel):
     cancellation_reason: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Contract Alert schemas
+# ---------------------------------------------------------------------------
+
+
+class ContractAlertItem(BaseModel):
+    """A resolved/unresolved contract-ready alert for the dashboard."""
+
+    alert_id: UUID
+    created_at: datetime
+    buyer_name: Optional[str] = None
+    buyer_email: Optional[str] = None
+    deal_address: Optional[str] = None
+    deal_state: Optional[str] = None
+    negotiated_price: Optional[float] = None
+    my_payout: Optional[float] = None
+    jv_partner_name: Optional[str] = None
+    resolved: bool = False
+    resolved_at: Optional[datetime] = None
+    full_metadata: Optional[dict] = None
+
+
+class ContractAlertResolveRequest(BaseModel):
+    """Schema for resolving a contract alert."""
+
+    notes: Optional[str] = Field(None, max_length=1000)
