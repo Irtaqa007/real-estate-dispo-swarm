@@ -1019,30 +1019,17 @@ async def send_ghost_recovery_emails() -> int:
                         thread_context=thread_campaigns,
                     )
 
-                    # ── AI Validation pre-send guard ──
-                    try:
-                        validation = await validate_ai_output(
-                            content=email_data["body"],
-                            content_type="ghost_recovery_email",
-                            deal=deal,
-                            buyer=buyer,
-                        )
-                    except Exception as val_err:
+                    # ── Check validation result from ghost_recovery.py ──
+                    if email_data.get("validation_blocked"):
                         logger.error(
-                            "AI validator failed for ghost recovery, proceeding with unvalidated send: %s",
-                            val_err,
-                        )
-                        validation = ValidationResult(severity="pass", corrected_content=None, violations=[], checks_run=[])
-
-                    if validation.severity == "block":
-                        logger.error(
-                            "Ghost recovery email blocked by validator for buyer %s, deal %s: %s",
-                            campaign.buyer_id, campaign.deal_id, validation.violations,
+                            "Ghost recovery email blocked by AI validator for buyer %s, deal %s: %s",
+                            campaign.buyer_id, campaign.deal_id,
+                            email_data.get("validation_violations", "unknown"),
                         )
                         # Do NOT increment ghost_recovery_touch — will retry next cycle
                         continue
 
-                    body_to_send = validation.corrected_content or email_data["body"]
+                    body_to_send = email_data["body"]
 
                     # Send via send_email with send_type="reply" (never blocked by daily cap)
                     result = await send_email(

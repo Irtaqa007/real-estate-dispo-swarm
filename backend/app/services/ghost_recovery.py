@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.config import settings
 from app.models.schemas import Buyer, Campaign, Deal
+from app.services.ai_validator import validate_ai_output
 from app.services.groq_client import groq_chat_completion
 
 logger = logging.getLogger(__name__)
@@ -270,6 +271,35 @@ async def generate_ghost_recovery_email(
         sign_off = settings.operator_email_signature.strip()
         if sign_off and not body.rstrip().endswith(sign_off):
             body = body.rstrip() + "\n\n" + sign_off
+
+        # ── AI Validation pre-send guard ──
+        try:
+            validation = await validate_ai_output(
+                content=body,
+                content_type="ghost_recovery_email",
+                deal=deal,
+                buyer=buyer,
+            )
+            if validation.severity != "block":
+                body = validation.corrected_content or body
+            else:
+                logger.error(
+                    "Ghost recovery email blocked by AI validator "
+                    "for buyer %s deal %s: %s",
+                    buyer.id, deal.id, validation.violations,
+                )
+                return {
+                    "subject": subject,
+                    "body": body,
+                    "touch_number": touch_number,
+                    "validation_blocked": True,
+                    "validation_violations": validation["violations"],
+                }
+        except Exception as val_err:
+            logger.error(
+                "AI validator failed for ghost recovery email, "
+                "proceeding with unvalidated content: %s", val_err,
+            )
 
         logger.info(
             "Generated ghost recovery touch %d for buyer %s on deal %s: '%.60s'",

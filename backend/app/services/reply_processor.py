@@ -23,6 +23,7 @@ from app.config import settings
 from app.models.schemas import Buyer, Campaign, Deal, JVPartner
 from datetime import datetime, timezone
 
+from app.services.ai_validator import validate_ai_output
 from app.services.audit_logger import audit
 from app.services.groq_client import groq_chat_completion
 from app.services.pass_reason_extractor import extract_pass_reason
@@ -436,6 +437,35 @@ async def process_reply(
                         buyer_id, deal_id, rb_err, exc_info=True,
                     )
 
+        # ── AI Validation pre-send guard for reply content ──
+        validation_blocked = False
+        if question_answer and db is not None:
+            try:
+                v_deal = await db.get(Deal, deal_id) if deal_id else None
+                v_buyer = await db.get(Buyer, buyer_id) if buyer_id else None
+                validation = await validate_ai_output(
+                    content=question_answer,
+                    content_type="reply_email",
+                    deal=v_deal,
+                    buyer=v_buyer,
+                )
+                if validation.severity == "block":
+                    logger.error(
+                        "Reply email blocked by AI validator for buyer %s "
+                        "deal %s: %s",
+                        buyer_id, deal_id, validation.violations,
+                    )
+                    validation_blocked = True
+                else:
+                    question_answer = (
+                        validation.corrected_content or question_answer
+                    )
+            except Exception as val_err:
+                logger.error(
+                    "AI validator failed for reply email, proceeding "
+                    "with unvalidated content: %s", val_err,
+                )
+
         return {
             "reply_intent": primary_intent,
             "primary_intent": primary_intent,
@@ -450,6 +480,7 @@ async def process_reply(
             ),
             "question_answer": question_answer or None,
             "pass_reason_followup": pass_reason_followup,
+            "validation_blocked": validation_blocked or None,
         }
 
     except json.JSONDecodeError as e:
