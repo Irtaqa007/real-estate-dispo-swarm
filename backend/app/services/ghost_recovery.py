@@ -27,7 +27,7 @@ TOUCH_ARCS = {
     1: {
         "arc": "Soft Re-entry",
         "description": (
-            "Reference the last conversation specifically. Zero pressure. "
+            "Reference the last conversation specifically. Zero pressure. Day 3 after silence. "
             "\"Just wanted to circle back on [specific thing discussed]\". "
             "Acknowledge the buyer's previous interest naturally."
         ),
@@ -38,8 +38,8 @@ TOUCH_ARCS = {
     2: {
         "arc": "New Angle",
         "description": (
-            "Give them a reason to re-open the conversation. New information, "
-            "updated detail, or a different value angle on the same deal."
+            "Give them a reason to re-open the conversation. New information, Day 7. "
+            "Updated detail, or a different value angle on the same deal."
         ),
         "instruction": "New value angle. If possible, share a different aspect of the deal "
                         "that wasn't discussed before (e.g., a different exit strategy, "
@@ -48,7 +48,7 @@ TOUCH_ARCS = {
     3: {
         "arc": "Honest Check-in",
         "description": (
-            "Low pressure exit ramp offered. "
+            "Low pressure exit ramp offered. Day 12. "
             "\"Are you still looking at deals in [their market] or has your focus shifted?\""
         ),
         "instruction": "The honest check-in. Acknowledge the natural passage of time. "
@@ -58,21 +58,32 @@ TOUCH_ARCS = {
     4: {
         "arc": "Pattern Interrupt",
         "description": (
-            "Extremely short. One line only. Nothing else."
+            "Extremely short. Day 18. One line only. Nothing else."
         ),
-        "instruction": "EXACTLY ONE SENTENCE. No greeting, no sign-off, no fluff. "
-                        "Pattern interrupt format: \"[Name] — still interested in [deal/market]?\" "
-                        "THAT IS THE ENTIRE EMAIL. Do not add anything else.",
+        "instruction": (
+            "One line only. The entire email body is one sentence. "
+            "Format: '[First name] — still looking at deals in [their market]?' "
+            "Nothing else. No context, no re-pitch, no explanation. "
+            "The brevity is intentional — it signals confidence, not desperation. "
+            f"Sign with {settings.operator_email_signature} on a new line."
+        ),
     },
     5: {
         "arc": "Exit",
         "description": (
-            "Final close or clean exit with future hook."
+            "Final close or clean exit with future hook. Day 25."
         ),
-        "instruction": "The exit email. Clean close with a future hook. "
-                        "Say you'll stop reaching out on this one but you'll keep them in mind "
-                        "for future deals that match their criteria. Leave the door open to reply. "
-                        "Professional, gracious, final.",
+        "instruction": (
+            "The final email. Clean, warm, no bitterness. "
+            "Three sentences maximum: "
+            "1. You're closing the loop on this deal. "
+            "2. When the next deal comes that fits their criteria, "
+            "   you'll send it their way. "
+            "3. Wish them well. "
+            "No ask. No CTA. The relationship stays warm even as the deal closes. "
+            "Never mention why they didn't respond. Never mention the silence. "
+            f"Sign with {settings.operator_email_signature}."
+        ),
     },
 }
 
@@ -81,11 +92,22 @@ TOUCH_ARCS = {
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "You are a wholesale real estate disposition expert with 15 years of experience. "
-    "You write concise, professional re-engagement emails to cash buyers who went quiet. "
-    "Never sound desperate. Be conversational and direct. "
-    "You are re-engaging a conversation that already had momentum — reference what was discussed. "
-    "Return ONLY valid JSON with keys: subject, body. No markdown, no code fences."
+    f"OPERATOR IDENTITY — you ARE this person in all recovery emails:\n"
+    f"Name: {settings.operator_name}\n"
+    f"Sign-off: {settings.operator_email_signature}\n"
+    f"Tone: {settings.operator_tone}\n"
+    f"Never use: {settings.operator_never_say}\n"
+    f"Context: {settings.operator_context}\n\n"
+    f"GHOST RECOVERY RULES:\n"
+    f"- Never reference the silence or the fact they didn't respond\n"
+    f"- Never say 'I haven't heard from you' or 'just checking in'\n"
+    f"- Act as if the timing of this email is completely natural\n"
+    f"- The thread context below is critical — reference specific things "
+    f"  from the conversation that went cold, not generic deal details\n"
+    f"- Sound like a real investor who reached out when they thought of "
+    f"  something relevant — not a system running a drip sequence\n"
+    f"- Do not reveal AI or automation under any circumstances\n"
+    f"- Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
 )
 
 
@@ -244,7 +266,7 @@ async def generate_ghost_recovery_email(
     )
 
     messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT + operator_block},
+        {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
 

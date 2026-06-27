@@ -28,116 +28,150 @@ TOUCH_CONFIGS = [
         "delay_days": 0,
         "arc": "Pattern Interrupt + Reciprocity",
         "arc_description": (
-            "Break inbox monotony. Offer value first (numbers, photos) before asking. "
-            "Reciprocity principle: give data, get attention."
+            "Break inbox monotony with specificity. This buyer gets deals "
+            "from 10 wholesalers — be the one who clearly read their buy box. "
+            "Lead with the numbers, not the pitch. Reciprocity principle: "
+            "give value first (spread, address, numbers), ask nothing yet."
         ),
         "subject_formula": "{Address} — ${Asking:,} | ${Spread:,} spread",
         "body_structure": (
-            "1. Pattern interrupt: Reference buyer's specific criteria from buy_box. "
-            "2. Value stack: 3 numbers only — ARV, asking, spread. No fluff. "
-            "3. Reciprocity hook: Offer Google Drive folder with photos. "
-            "4. Low-friction CTA."
+            "1. Open by referencing ONE specific thing from their buy box "
+            "(city, property type, price range) — not generically, specifically. "
+            "2. Three numbers only: ARV, asking price, spread. No adjectives. "
+            "3. One line on condition — honest, not hyped. "
+            "4. Low-friction close: 'Worth a look?' or 'Want the photos?'"
         ),
-        "power_words": "photos, spread, cash, numbers",
-        "cta_type": "Low-friction: 'Worth a look?' (not 'Buy now')",
+        "power_words": "spread, photos, numbers, cash",
+        "cta_type": "Minimal ask: 'Worth a look?' — not 'Are you interested?'",
+        "tone_note": (
+            "Write like you're texting a fellow investor you respect, "
+            "not pitching a stranger. Short sentences. No exclamation marks. "
+            "No superlatives. Let the numbers do the selling."
+        ),
     },
     {
         "touch": 2,
-        "delay_days": 2,
-        "arc": "Curiosity Gap + Value Deepening",
+        "delay_days": 3,
+        "arc": "Curiosity Gap + New Information",
         "arc_description": (
-            "Zeigarnik effect — brains hate open loops. Touch 1 created curiosity; "
-            "Touch 2 closes part of it while opening a new loop."
+            "Zeigarnik effect — open loops demand closure. Touch 1 created "
+            "curiosity with numbers. Touch 2 delivers something new they "
+            "didn't have: a comp, a rehab estimate, or a detail that changes "
+            "the picture. Give them a reason to re-engage that isn't 'just following up'."
         ),
-        "subject_formula": "Re: {Address} — rehab estimate + comps inside",
+        "subject_formula": "Re: {Address} — one thing I forgot to mention",
         "body_structure": (
-            "1. Loop closure: 'Quick follow-up on the deal I sent Tuesday'. "
-            "2. New value: Rehab estimate, recent comp within 0.5 miles. "
-            "3. Social proof seed: 'Similar property on {Street} closed last month at ${CompPrice}'. "
-            "4. Curiosity CTA: 'Want the full comp report?'"
+            "1. Acknowledge Touch 1 briefly — one line, not apologetic. "
+            "2. The new thing: a recent comp, a rehab number, an exit strategy "
+            "angle you didn't mention. Make it genuinely useful. "
+            "3. Soft question: 'Does that change anything for you?'"
         ),
-        "power_words": "comps, estimate, closed, similar, report",
-        "cta_type": "Curiosity gap: 'Want the full comp report?'",
+        "power_words": "comp, rehab, exit, number, forgot",
+        "cta_type": "Soft question that invites response without pressure",
+        "tone_note": (
+            "This email should feel like you remembered something important "
+            "and sent a quick follow-up — not a scheduled drip sequence. "
+            "Natural, human, slightly informal."
+        ),
     },
     {
         "touch": 3,
-        "delay_days": 4,
-        "arc": "Social Proof + Authority",
+        "delay_days": 6,
+        "arc": "Social Proof + Market Context",
         "arc_description": (
-            "Buyers trust validated opportunities. 'Others are looking' triggers "
-            "FOMO without desperation."
+            "Buyers trust validated opportunities. Reference real market "
+            "activity — not fabricated urgency. The goal is to give them "
+            "context that helps them make a decision, not pressure them."
         ),
-        "subject_formula": "{Address} — getting serious interest",
+        "subject_formula": "{Address} — update from my end",
         "body_structure": (
-            "1. Authority frame: 'Quick update from my desk'. "
-            "2. Social proof: Reference genuine deal activity or market "
-            "demand without fabricating specific buyer counts. "
-            "Use language like 'this one is getting attention' or "
-            "'moving quickly in this market' — never invent specific "
-            "numbers of buyers or inquiries. "
-            "3. Scarcity nudge: Haven't released it to the full list yet. "
-            "4. Exclusivity CTA: 'Want first shot before I open it up?'"
+            "1. Brief update: what's happening with this deal or in this market. "
+            "2. Social proof: reference genuine activity — 'this market is moving' "
+            "or 'had some interest on this one' — NEVER invent specific buyer counts. "
+            "3. Soft close: 'Still on your radar?' "
         ),
-        "power_words": "network, attention, moving, released, first shot, interest",
-        "cta_type": "Exclusivity: 'Want first shot before I open it up?'",
+        "power_words": "update, market, moving, radar",
+        "cta_type": "Simple question: 'Still on your radar?'",
+        "tone_note": (
+            "Factual, brief, zero hype. Sound like someone giving a friend "
+            "a market update, not running a sales sequence."
+        ),
     },
     {
         "touch": 4,
-        "delay_days": 7,
-        "arc": "Scarcity + Loss Aversion",
+        "delay_days": 10,
+        "arc": "New Angle + Value Reframe",
         "arc_description": (
-            "Loss aversion is 2x stronger than gain pursuit. Frame missing the deal "
-            "as a loss, not missing a gain."
+            "If the price didn't land, maybe the exit strategy will. "
+            "Present a different way to look at the same deal — a different "
+            "exit, a different buyer profile who'd want this, a creative angle "
+            "they may not have considered."
         ),
-        "subject_formula": "Checking in — {Address} still available (for now)",
+        "subject_formula": "{Address} — different angle on this one",
         "body_structure": (
-            "1. Status update: 'This one's still on my desk'. "
-            "2. Competitive pressure: Another buyer submitted a soft offer — reviewing tomorrow. "
-            "3. Loss frame: 'Don't want you to miss it if it's in your wheelhouse'. "
-            "4. Action CTA: 'Can you lock it up by {Date}?'"
+            "1. One sentence acknowledging you've reached out before. "
+            "2. The reframe: a different exit strategy, a different way to "
+            "underwrite the deal, or a detail that hits differently now. "
+            "3. Direct question: 'Does this version of the deal work better?'"
         ),
-        "power_words": "soft offer, reviewing, miss, lock it up, wheelhouse",
-        "cta_type": "Specific deadline: 'Can you lock it up by {Date}?'",
+        "power_words": "angle, exit, strategy, reframe, different",
+        "cta_type": "Direct question inviting a yes or a counter",
+        "tone_note": (
+            "Confident, not desperate. You're bringing new information, "
+            "not begging. If the deal doesn't work for them, that's fine — "
+            "say so implicitly through your calm tone."
+        ),
     },
     {
         "touch": 5,
-        "delay_days": 9,
-        "arc": "Urgency Peak + Authority Anchor",
+        "delay_days": 15,
+        "arc": "Soft Urgency + Decision Point",
         "arc_description": (
-            "Time pressure + authority commitment. 'I need to decide' transfers urgency "
-            "to the buyer."
+            "Create a natural decision point without manufactured pressure. "
+            "The deal has a lifecycle — it won't be available forever and "
+            "that's simply true, not a sales tactic. Give them a clear "
+            "yes/no framing."
         ),
-        "subject_formula": "Last call: {Address} → decision deadline tomorrow",
+        "subject_formula": "{Address} — decision deadline tomorrow",
         "body_structure": (
-            "1. Deadline clarity: Need to make a final decision "
-            "on this deal by tomorrow. Frame it as your own "
-            "deadline — not a JV partner's. "
-            "2. Final value reminder: ARV, asking, spread — one last time. "
-            "3. Authority stance: 'If you're in, I'll hold it. If not, I'll release it'. "
-            "4. Binary CTA: 'In or out?'"
+            "1. Acknowledge the timeline — you need to make a decision on "
+            "this deal. Frame it as your own operational deadline, not pressure. "
+            "2. Binary offer: in or out? Make it easy to say either. "
+            "3. Brief: this is the shortest email in the sequence."
         ),
-        "power_words": "last call, deadline, decision, hold, binary, in or out",
-        "cta_type": "Binary: 'In or out?'",
+        "power_words": "deadline, decision, in or out, tomorrow",
+        "cta_type": "Binary: 'In or out on this one?'",
+        "tone_note": (
+            "Extremely short. Three sentences maximum. The brevity itself "
+            "signals the deadline is real. No explanation, no re-pitching "
+            "the deal. They know the deal by now."
+        ),
     },
     {
         "touch": 6,
-        "delay_days": 14,
-        "arc": "Breakup + Future Commitment",
+        "delay_days": 21,
+        "arc": "Clean Exit + Future Door Open",
         "arc_description": (
-            "15-25% reply rate on breakup emails. The 'loss' of the relationship "
-            "triggers re-engagement."
+            "The breakup email. Not angry, not desperate — just closing the "
+            "loop cleanly. The goal is to exit this deal conversation while "
+            "keeping the relationship intact for the next deal. Buyers respect "
+            "people who don't chase."
         ),
         "subject_formula": "Closing the loop on {Address}",
         "body_structure": (
-            "1. Clean close: Made a decision to move in a "
-            "different direction this morning. Do not mention "
-            "JV partner or partnership structure. "
-            "2. No blame: 'Timing wasn't right — totally understand'. "
-            "3. Future hook: 'I'll keep you posted on the next heavy rehab. Usually get 2-3 per month'. "
-            "4. Open door CTA: 'If anything changes on your end, just reply'."
+            "1. Clean close: made a decision to move in a different direction "
+            "on this one. Do not mention any partner or third party. "
+            "2. Door open: 'When the next deal comes through that fits your "
+            "criteria, I'll send it your way.' "
+            "3. No ask. No CTA. Just a clean end."
         ),
-        "power_words": "released, timing, keep you posted, next, reply",
-        "cta_type": "Open door: 'If anything changes on your end, just reply'",
+        "power_words": "closing, loop, next, criteria",
+        "cta_type": "None — this is an exit, not a pitch",
+        "tone_note": (
+            "Warm, brief, and final. The buyer should feel respected, not "
+            "chased. This email should make them more likely to respond to "
+            "your next deal, not less."
+        ),
     },
 ]
 
@@ -292,12 +326,22 @@ def _build_prompt(
     )
 
     system_prompt = (
-        "You are a wholesale real estate disposition expert with 15 years of experience. "
-        "You write concise, professional pitch emails to cash buyers. "
-        "Never sound desperate. Be conversational and direct. "
-        "Always reference the buyer's specific criteria from their buy box. "
-        f"Return ONLY valid JSON with keys: subject, body. No markdown, no code fences."
-        f"{operator_id_block}"
+        f"OPERATOR IDENTITY — you ARE this person, write entirely as them:\n"
+        f"Name: {settings.operator_name}\n"
+        f"Sign-off every email with: {settings.operator_email_signature}\n"
+        f"Tone: {settings.operator_tone}\n"
+        f"Never use these words or phrases: {settings.operator_never_say}\n"
+        f"Context about who you are (use naturally when relevant): "
+        f"{settings.operator_context}\n\n"
+        f"WRITING RULES:\n"
+        f"- Write like a real investor texting another investor — not a marketer\n"
+        f"- Short sentences. No exclamation marks. No superlatives.\n"
+        f"- Never sound like a bulk email. Sound like one person writing to one person.\n"
+        f"- Reference the buyer's specific buy box criteria — not generically\n"
+        f"- Let numbers sell. Keep adjectives minimal.\n"
+        f"- Do not reveal you are AI or automated under any circumstances\n"
+        f"- Return ONLY valid JSON: {{\"subject\": \"...\", \"body\": \"...\"}}\n"
+        f"- No markdown, no code fences, no explanation outside the JSON"
     )
 
     user_prompt = (
@@ -318,8 +362,10 @@ def _build_prompt(
         f"{intelligence_block}"
         f"PSYCHOLOGICAL ARC FOR TOUCH {touch}: {config['arc_description']}\n"
         f"REQUIRED POWER WORDS: {config['power_words']}\n"
-        f"MAX SENTENCES: 4\n"
+        f"LENGTH: Match the psychological arc. Touch 1-2: 4-6 sentences. "
+        f"Touch 3-4: 3-5 sentences. Touch 5: 2-3 sentences. Touch 6: 3-4 sentences.\n"
         f"TONE: Professional, conversational, never desperate\n"
+        f"TONE NOTE: {config.get('tone_note', '')}\n"
         f"CTA TYPE: {config['cta_type']}\n\n"
         f"Subject line must be 6-10 words. Body must reference buyer's specific criteria.\n"
         f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"

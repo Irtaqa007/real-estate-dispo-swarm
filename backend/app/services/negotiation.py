@@ -18,17 +18,23 @@ from app.services.groq_client import groq_chat_completion
 logger = logging.getLogger(__name__)
 
 _NEGOTIATION_SYSTEM_PROMPT = (
-    "You are a wholesale real estate negotiator. "
-    "Keep responses concise, professional, and conversational.\n"
-    f"OPERATOR IDENTITY (you ARE this person, write as them):\n"
+    f"OPERATOR IDENTITY — you ARE this person in every response:\n"
     f"Name: {settings.operator_name}\n"
     f"Sign-off: {settings.operator_email_signature}\n"
     f"Tone: {settings.operator_tone}\n"
     f"Never use: {settings.operator_never_say}\n"
-    f"{settings.operator_context}\n"
-    f"IMPORTANT: Reply in first person as {settings.operator_name}. "
-    f"Do not reveal you are AI or automated. "
-    f"End with the configured sign-off."
+    f"Context: {settings.operator_context}\n\n"
+    f"NEGOTIATION RULES:\n"
+    f"- Never reveal the floor price or contract price under any circumstances\n"
+    f"- Never say 'my floor is X' or 'I can't go below X'\n"
+    f"- When approving: be warm but not over-excited. 'Works for me.' not 'Amazing!'\n"
+    f"- When declining or countering: be direct, not apologetic\n"
+    f"- Frame any pushback around 'my numbers' or 'where I need to be' —\n"
+    f"  not around the JV partner, not around costs, not around excuses\n"
+    f"- Keep responses under 4 sentences\n"
+    f"- Always end with {settings.operator_email_signature}\n"
+    f"- Write as a real investor, not a salesperson\n"
+    f"- Do not reveal AI or automation under any circumstances"
 )
 
 
@@ -137,14 +143,13 @@ async def _generate_approval_response(
     messages = [
         {"role": "system", "content": _NEGOTIATION_SYSTEM_PROMPT},
         {"role": "user", "content": (
-            f"The buyer {buyer_name} countered at ${counter_price:,.0f} "
-            f"for {deal.address}. The deal's floor price is ${float(deal.floor_price):,.0f}. "
-            f"We have authority to accept offers at or above floor price.\n\n"
-            f"Write a professional response letting the buyer know:\n"
-            f"1. We can do that price — happy to make it work\n"
-            f"2. We're sending the assignment contract now\n"
-            f"3. Next steps: title, closing timeline\n\n"
-            f"Keep it to 3-4 sentences. Warm but professional."
+            f"The buyer offered ${counter_price:,.0f} and I'm accepting it. "
+            f"Write a brief, warm confirmation as {settings.operator_name}. "
+            f"Acknowledge their offer, confirm we're moving forward, and say "
+            f"you'll get the paperwork sorted. "
+            f"Do NOT use words like 'great', 'excellent', 'amazing', 'fantastic'. "
+            f"Sound like a calm, confident investor closing a deal, not a salesperson. "
+            f"Under 3 sentences. End with {settings.operator_email_signature}."
         )},
     ]
 
@@ -176,15 +181,16 @@ async def _generate_deferral_response(
     messages = [
         {"role": "system", "content": _NEGOTIATION_SYSTEM_PROMPT},
         {"role": "user", "content": (
-            f"The buyer {buyer_name} countered at ${counter_price:,.0f} "
-            f"for {deal.address} (asking: ${float(deal.asking_price):,.0f}). "
-            f"This is below our floor price of ${float(deal.floor_price):,.0f}, "
-            f"so we need partner approval.\n\n"
-            f"Write a professional response:\n"
-            f"1. Thank them for the offer\n"
-            f"2. Say you need to discuss with your partner\n"
-            f"3. You'll get back to them within 24 hours\n\n"
-            f"Keep it to 3 sentences. Don't mention the floor price."
+            f"The buyer offered ${counter_price:,.0f}. My numbers need me closer "
+            f"to ${float(deal.floor_price):,.0f} to make this work. "
+            f"Write a brief response as {settings.operator_name} that: "
+            f"1. Acknowledges their offer without dismissing it "
+            f"2. States where you need to be — without revealing it's a hard floor "
+            f"3. Leaves the door open for them to come up "
+            f"Do NOT say 'unfortunately', 'I'm sorry', or 'I can't'. "
+            f"Sound like a confident investor who knows their numbers, not someone "
+            f"apologizing for not taking a bad deal. "
+            f"Under 3 sentences. End with {settings.operator_email_signature}."
         )},
     ]
 

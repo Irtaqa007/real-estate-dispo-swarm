@@ -77,7 +77,7 @@ def test_build_prompt_contains_operator_id_block():
     assert "OPERATOR IDENTITY" in system_content
     assert settings.operator_name in system_content
     assert settings.operator_tone in system_content
-    assert "Subject line must NEVER contain the operator name" in system_content
+    assert "WRITING RULES" in system_content
 
 
 def test_build_prompt_operator_signature_in_system_prompt():
@@ -216,7 +216,7 @@ def test_classification_system_prompt_contains_identity():
     """System prompt in reply_processor should contain operator identity."""
     from app.services.reply_processor import _CLASSIFICATION_SYSTEM_PROMPT
 
-    assert "OPERATOR IDENTITY" in _CLASSIFICATION_SYSTEM_PROMPT
+    assert "OPERATOR CONTEXT" in _CLASSIFICATION_SYSTEM_PROMPT
     assert settings.operator_name in _CLASSIFICATION_SYSTEM_PROMPT
     assert "first person" in _CLASSIFICATION_SYSTEM_PROMPT
 
@@ -309,4 +309,4 @@ def test_negotiation_system_prompt_contains_identity():
     """Negotiation system prompt should contain operator identity."""
     assert "OPERATOR IDENTITY" in _NEGOTIATION_SYSTEM_PROMPT
     assert settings.operator_name in _NEGOTIATION_SYSTEM_PROMPT
-    assert "first person" in _NEGOTIATION_SYSTEM_PROMPT
+    assert "NEGOTIATION RULES" in _NEGOTIATION_SYSTEM_PROMPT

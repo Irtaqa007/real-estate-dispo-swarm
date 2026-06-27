@@ -57,16 +57,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _CLASSIFICATION_SYSTEM_PROMPT = (
-    "You are a wholesale real estate expert and negotiator. "
-    "Analyze this buyer reply email and extract structured data.\n"
-    f"OPERATOR IDENTITY (you respond as this person):\n"
+    f"You are analyzing a buyer reply email for a wholesale real estate operator.\n"
+    f"Your job is to classify the reply intent accurately and extract structured data.\n\n"
+    f"OPERATOR CONTEXT (for generating responses — you ARE this person):\n"
     f"Name: {settings.operator_name}\n"
     f"Sign-off: {settings.operator_email_signature}\n"
     f"Tone: {settings.operator_tone}\n"
     f"Never use: {settings.operator_never_say}\n"
-    f"{settings.operator_context}\n"
-    f"IMPORTANT: Reply in first person as {settings.operator_name}. "
-    f"Do not reveal you are AI or automated."
+    f"Context: {settings.operator_context}\n\n"
+    f"When generating responses, write entirely in first person as "
+    f"{settings.operator_name}. Sound like a real investor, not a system. "
+    f"Never reveal you are AI. Never use the banned phrases above.\n\n"
+    f"Classification must be objective and accurate — classify what the buyer "
+    f"actually said, not what you hope they meant."
 )
 
 _CLASSIFICATION_USER_PROMPT_TEMPLATE = """REPLY EMAIL:
@@ -91,7 +94,11 @@ Also extract:
 5. counter_price: If intent is Counter, extract the offered price as a number (or null)
 6. summary: One-sentence summary of what the buyer wants
 7. buybox_changes: If intent is Buybox_Changed, extract the FULL updated buying criteria text from their reply (or null)
-8. question_answer: If intent is Question, provide a direct 2-3 sentence answer to their question (or null)
+8. question_answer: If intent is Question AND the answer can be confidently
+    derived from the deal data provided, give a direct 1-3 sentence answer as
+    {{settings.operator_name}} would say it — conversational, first person.
+    If the question cannot be answered from available data, return null
+    (the system will generate a hold response separately)
 
 Return ONLY JSON:
 {{
@@ -920,10 +927,10 @@ async def detect_uncertainty_and_hold(
     # Generate appropriate holding response
     import random
     holding_responses = [
-        "Let me pull that up and get back to you shortly.",
-        "Good question — let me double check that and come back to you today.",
-        "I want to make sure I give you the right number on that — give me a few hours.",
-        "Let me look into that and follow up with the details shortly.",
+        "Let me pull that number and get back to you shortly.",
+        "Good question — give me a few hours to check on that.",
+        "I want to make sure I give you the right answer on that — let me follow up today.",
+        "On it — I'll get back to you with that shortly.",
     ]
     holding_text = random.choice(holding_responses)
     

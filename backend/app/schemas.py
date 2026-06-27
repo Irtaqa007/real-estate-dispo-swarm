@@ -61,9 +61,11 @@ class BuyerResponse(BuyerBase):
     avg_spread_closed: Optional[float] = None
     total_lifetime_spread: Optional[float] = 0
     engagement_score: Optional[float] = 0
+    email_verified_at: Optional[datetime] = None
     last_pitch_sent_at: Optional[datetime] = None
     last_reply_at: Optional[datetime] = None
     pitches_this_week: Optional[int] = 0
+    pitches_this_week_reset_at: Optional[datetime] = None
     unsubscribed_at: Optional[datetime] = None
     portfolio_insights: Optional[dict] = None
     additional_emails: List[str] = []
