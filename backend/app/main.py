@@ -67,18 +67,6 @@ async def lifespan(app: FastAPI):
 
     gmail_circuit_breaker.set_persistence_callback(_persist_cb_queue)
 
-    # Pre-load the embedding model so the first real request doesn't
-    # hang for ~30s loading sentence-transformers on-demand.
-    try:
-        import asyncio
-        from app.services.embeddings import _get_model
-        loop = asyncio.get_running_loop()
-        logger.info("Pre-loading embedding model (%s)...", "mixedbread-ai/mxbai-embed-large-v1")
-        await loop.run_in_executor(None, _get_model)
-        logger.info("Embedding model pre-loaded")
-    except Exception as e:
-        logger.warning("Failed to pre-load embedding model: %s", e, exc_info=True)
-
     # Validate required operator identity fields
     if not settings.operator_name or not settings.operator_email_signature:
         logger.critical(
@@ -93,6 +81,25 @@ async def lifespan(app: FastAPI):
 
     # Start background campaign scheduler (runs every hour)
     start_scheduler()
+
+    # Pre-load the embedding model in the background AFTER the app is
+    # already serving requests — avoids blocking the healthcheck timeout.
+    # The first buyer/deal creation may still take ~30s if the model
+    # hasn't finished loading, but that's acceptable vs failing startup.
+    import asyncio
+
+    async def _preload_model_background():
+        try:
+            from app.services.embeddings import _get_model
+            loop = asyncio.get_running_loop()
+            logger.info("Pre-loading embedding model in background...")
+            await loop.run_in_executor(None, _get_model)
+            logger.info("Embedding model pre-loaded successfully")
+        except Exception as e:
+            logger.warning("Failed to pre-load embedding model: %s", e, exc_info=True)
+
+    asyncio.ensure_future(_preload_model_background())
+
     yield
     # Shutdown: stop scheduler and cleanup
     await stop_scheduler()
