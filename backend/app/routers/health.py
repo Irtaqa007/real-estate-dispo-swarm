@@ -10,6 +10,7 @@ Provides a comprehensive health check for the entire system:
 - Resilience subsystem metrics
 """
 
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
@@ -92,12 +93,31 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     }
 
     # ------------------------------------------------------------------
-    # Groq rate limit status
+    # Groq status — real API connectivity check
     # ------------------------------------------------------------------
     groq_status = "available"
     groq_detail = get_rate_limit_status()
+
+    # Check rate limit first (cheap, no API call)
     if groq_detail["minute_limit_remaining"] <= 0:
         groq_status = "rate_limited"
+    else:
+        # Make a real minimal API call to verify connectivity
+        try:
+            await asyncio.wait_for(
+                groq_chat_completion(
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=1,
+                    model=settings.groq_fallback_model,
+                ),
+                timeout=5.0,
+            )
+            groq_status = "ok"
+        except asyncio.TimeoutError:
+            groq_status = "timeout"
+        except Exception as groq_err:
+            groq_status = "error"
+            groq_detail["error"] = str(groq_err)[:100]
 
     # ------------------------------------------------------------------
     # Scheduler status
@@ -131,20 +151,14 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         cohere_detail["error"] = cohere_result["error"]
 
     # ------------------------------------------------------------------
-    # Groq connectivity check — minimal test call with fallback model
+    # Groq connectivity check — derived from the real API call above
+    # to avoid making two Groq calls per health check.
     # ------------------------------------------------------------------
-    async def _check_groq_health() -> dict:
-        try:
-            result = await groq_chat_completion(
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=5,
-                model=settings.groq_fallback_model,
-            )
-            return {"status": "ok"}
-        except Exception as e:
-            return {"status": "error", "detail": str(e)[:100]}
-
-    groq_health = await _check_groq_health()
+    groq_health = {
+        "status": "ok" if groq_status == "ok" else groq_status,
+    }
+    if groq_detail.get("error"):
+        groq_health["detail"] = groq_detail["error"]
 
     # ------------------------------------------------------------------
     # Scheduler heartbeat check

@@ -24,7 +24,7 @@ from app.services.dead_letter_queue import retry_failed_campaign
 from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
 from app.services.groq_client import get_rate_limit_status
-from app.services.title_coordinator import process_title_emails, send_assignment_contract
+from app.services.title_coordinator import process_title_emails, run_title_chases, send_assignment_contract
 from app.services.buyer_scoring import run_tier_promotions, reset_pitch_counters
 from app.services.aging_monitor import run_aging_monitor
 from app.services.buyer_insights import update_all_buyer_insights
@@ -1692,6 +1692,14 @@ async def _scheduler_loop() -> None:
                     except Exception as e:
                         logger.error("Scheduler: buyer re-engagement failed: %s", e, exc_info=True)
 
+                async def _task_title_chases() -> None:
+                    try:
+                        sent = await run_title_chases()
+                        if sent > 0:
+                            logger.info("Scheduler: sent %d title chase email(s)", sent)
+                    except Exception as e:
+                        logger.error("Scheduler: title chase failed: %s", e, exc_info=True)
+
                 await asyncio.gather(
                     _task_aging(),
                     _task_insights(),
@@ -1700,6 +1708,7 @@ async def _scheduler_loop() -> None:
                     _task_auto_match(),
                     _task_ghost_recovery(),
                     _task_reengagement(),
+                    _task_title_chases(),
                     return_exceptions=True,
                 )
 

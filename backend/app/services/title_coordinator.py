@@ -472,6 +472,16 @@ async def _process_single_title_email(
                 action_taken = True
                 metadata["docs_needed"] = classification["action_items"]
 
+            # Any title company response means they've acknowledged
+            if action_taken and not deal.title_acknowledged:
+                deal.title_acknowledged = True
+                db.add(deal)
+                metadata["title_acknowledged"] = True
+                logger.info(
+                    "Title acknowledged for deal %s (%s) via '%s' intent",
+                    deal.id, deal.address, intent,
+                )
+
     # Log to activity_log
     log_entry = ActivityLog(
         id=uuid.uuid4(),
@@ -554,8 +564,7 @@ async def send_assignment_contract(
         f"Please review and sign the attached contract. "
         f"The title company ({cc_email or 'your closing agent'}) has been CC'd "
         f"on this email to begin the closing process.\n\n"
-        f"Best regards,\n"
-        f"{settings.app_name} Team"
+        f"{settings.operator_email_signature}"
     )
 
     try:
@@ -570,6 +579,14 @@ async def send_assignment_contract(
             "Assignment contract sent to %s (CC: %s) — message_id: %s",
             buyer_email, cc_email or "(none)", result.get("message_id", "unknown"),
         )
+
+        # Set title_opened_at and title_company_email on the deal
+        if result.get("message_id"):
+            if not deal.title_opened_at:
+                deal.title_opened_at = datetime.now(timezone.utc)
+                deal.title_company_email = cc_email
+                db.add(deal)
+                await db.commit()
 
         return {
             "sent": True,
@@ -588,6 +605,223 @@ async def send_assignment_contract(
             "cc_email": cc_email,
             "error": str(e),
         }
+
+
+# ---------------------------------------------------------------------------
+# Title company chase sequence
+# ---------------------------------------------------------------------------
+
+
+CHASE_SUBJECTS: Dict[int, str] = {
+    1: "Following Up — {address}",
+    2: "Title Search Status — {address}",
+    3: "Update Request — {address}",
+    4: "Title Issues? — {address}",
+    5: "Closing Date Confirmation — {address}",
+    6: "Final Chase — {address}",
+}
+
+CHASE_BODIES: Dict[int, str] = {
+    1: (
+        "Hi,\n\nJust following up to confirm receipt of "
+        "the assignment contract for {address}. "
+        "Please let us know you have everything needed "
+        "to proceed.\n\n"
+        "{signature}"
+    ),
+    2: (
+        "Hi,\n\nChecking in on {address} — has the "
+        "title search been initiated? Please let us know "
+        "the current status.\n\n"
+        "{signature}"
+    ),
+    3: (
+        "Hi,\n\nWanted to get a progress update on "
+        "{address}. Any issues or additional "
+        "documents needed from our side?\n\n"
+        "{signature}"
+    ),
+    4: (
+        "Hi,\n\nAre there any title issues or "
+        "encumbrances we should be aware of on "
+        "{address}? Please advise at your "
+        "earliest convenience.\n\n"
+        "{signature}"
+    ),
+    5: (
+        "Hi,\n\nCan you confirm the closing date for "
+        "{address}? We want to make sure all "
+        "parties are aligned on the timeline.\n\n"
+        "{signature}"
+    ),
+    6: (
+        "Hi,\n\nThis is our final follow-up on "
+        "{address}. Please respond urgently with "
+        "a status update — we need to know if closing "
+        "is still on track.\n\n"
+        "{signature}"
+    ),
+}
+
+CHASE_SCHEDULE_DAYS: Dict[int, int] = {
+    1: 3,
+    2: 5,
+    3: 7,
+    4: 10,
+    5: 14,
+    6: 21,
+}
+
+
+async def send_title_chase_email(
+    db: AsyncSession,
+    deal: Deal,
+    chase_number: int,
+) -> dict:
+    """Send a proactive chase email to the title company.
+
+    Args:
+        db: Database session.
+        deal: The deal to chase on.
+        chase_number: 1-6 (maps to Day 3, 5, 7, 10, 14, 21).
+
+    Returns:
+        dict with keys: sent (bool), chase_number (int), reason (str on failure).
+    """
+    title_email = (
+        deal.title_company_email
+        or settings.title_company_email
+    )
+
+    if not title_email:
+        logger.warning(
+            "No title company email for deal %s — cannot send chase %d",
+            deal.id, chase_number,
+        )
+        return {"sent": False, "chase_number": chase_number, "reason": "no_title_email"}
+
+    subject = CHASE_SUBJECTS.get(chase_number, CHASE_SUBJECTS[6]).format(
+        address=deal.address,
+    )
+    body = CHASE_BODIES.get(chase_number, CHASE_BODIES[6]).format(
+        address=deal.address,
+        signature=settings.operator_email_signature,
+    )
+
+    try:
+        result = await send_email(
+            to=title_email,
+            subject=subject,
+            body=body,
+            send_type="reply",
+        )
+        deal.title_last_chase_at = datetime.now(timezone.utc)
+        deal.title_chase_count = (deal.title_chase_count or 0) + 1
+        db.add(deal)
+        await db.commit()
+        logger.info(
+            "Title chase %d sent for deal %s to %s",
+            chase_number, deal.id, title_email,
+        )
+        return {"sent": True, "chase_number": chase_number}
+    except Exception as e:
+        logger.error(
+            "Failed to send title chase %d for deal %s: %s",
+            chase_number, deal.id, e, exc_info=True,
+        )
+        return {"sent": False, "chase_number": chase_number, "error": str(e)}
+
+
+async def run_title_chases(db: Optional[AsyncSession] = None) -> int:
+    """Scheduler task: find deals needing a title chase and send one.
+
+    Logic per deal:
+    1. Deal must be "Under Contract" or "Sold" with title_opened_at set
+    2. title_acknowledged must be False (stop chasing once title responds)
+    3. Calculate days since title_opened_at
+    4. Determine next chase number (title_chase_count + 1)
+    5. If next_chase > 6: all chases sent, create dashboard alert
+    6. If days_open >= CHASE_SCHEDULE_DAYS[next_chase]: send chase
+
+    Returns:
+        Number of chase emails sent.
+    """
+    close_session = False
+    if db is None:
+        db = _db.async_session_factory()
+        close_session = True
+
+    try:
+        now = datetime.now(timezone.utc)
+
+        result = await db.execute(
+            select(Deal).where(
+                Deal.status.in_(["Under Contract", "Sold"]),
+                Deal.title_opened_at.isnot(None),
+                Deal.title_acknowledged == False,
+            )
+        )
+        deals_to_chase = result.scalars().all()
+
+        if not deals_to_chase:
+            return 0
+
+        sent_count = 0
+
+        for deal in deals_to_chase:
+            try:
+                days_open = (now - deal.title_opened_at).days
+                next_chase = (deal.title_chase_count or 0) + 1
+
+                if next_chase > 6:
+                    # All 6 chases sent with no response — create dashboard alert
+                    log_entry = ActivityLog(
+                        id=uuid.uuid4(),
+                        entity_type="deal",
+                        entity_id=deal.id,
+                        action="title_unresponsive",
+                        metadata_json={
+                            "deal_id": str(deal.id),
+                            "address": deal.address,
+                            "days_open": days_open,
+                            "chases_sent": 6,
+                            "alert_user": True,
+                            "action_required": (
+                                "Title company unresponsive after 6 chase emails. "
+                                "Call them directly or escalate."
+                            ),
+                        },
+                    )
+                    db.add(log_entry)
+                    await db.commit()
+                    continue
+
+                due_day = CHASE_SCHEDULE_DAYS[next_chase]
+
+                if days_open < due_day:
+                    continue  # Not due yet
+
+                chase_result = await send_title_chase_email(db, deal, next_chase)
+                if chase_result.get("sent"):
+                    sent_count += 1
+
+            except Exception as e:
+                logger.error(
+                    "Failed to process title chase for deal %s: %s",
+                    deal.id, e, exc_info=True,
+                )
+                continue
+
+        if sent_count:
+            logger.info("Title chase: %d chase email(s) sent", sent_count)
+        return sent_count
+
+    except Exception as e:
+        logger.error("Title chase task failed: %s", e, exc_info=True)
+        return 0
+    finally:
+        if close_session:
+            await db.close()
 
 
 # ---------------------------------------------------------------------------

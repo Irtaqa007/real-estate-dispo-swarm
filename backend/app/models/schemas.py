@@ -180,6 +180,12 @@ class Deal(Base):
     payment_confirmed = Column(Boolean, default=False)
     payment_confirmed_at = Column(DateTime(timezone=True), nullable=True)
     payment_amount = Column(Numeric(19, 2), nullable=True)
+    # Title company chase sequence fields
+    title_opened_at = Column(DateTime(timezone=True), nullable=True)
+    title_last_chase_at = Column(DateTime(timezone=True), nullable=True)
+    title_chase_count = Column(Integer, default=0)
+    title_acknowledged = Column(Boolean, default=False)
+    title_company_email = Column(Text, nullable=True)
     # Drive archive fields
     drive_folder_id = Column(Text, nullable=True)
     drive_archived = Column(Boolean, default=False)
