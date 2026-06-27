@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import ActivityLog, Deal
+from app.models.models import ActivityLog, Deal
 from app.services.matching_service import trigger_release_for_deal_async
 
 logger = logging.getLogger(__name__)

@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.models.schemas import Buyer, Campaign, Deal, JVPartner
+from app.models.models import Buyer, Campaign, Deal, JVPartner
 from app.services.reply_processor import process_reply
 
 

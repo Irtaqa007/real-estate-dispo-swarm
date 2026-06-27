@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.config import settings
-from app.models.schemas import ActivityLog, Buyer, Campaign, Deal
+from app.models.models import ActivityLog, Buyer, Campaign, Deal
 
 import json
 

@@ -193,7 +193,7 @@ async def _get_cached_archive_folder_id() -> Optional[str]:
     """Load the cached archive folder ID from app_state."""
     try:
         from app.database import async_session_factory
-        from app.models.schemas import AppState
+        from app.models.models import AppState
         from sqlalchemy import select
         async with async_session_factory() as db:
             row = await db.get(AppState, KEY_DRIVE_ARCHIVE_FOLDER)
@@ -212,7 +212,7 @@ async def _cache_archive_folder_id(folder_id: str) -> None:
     """Persist the archive folder ID to app_state for reuse."""
     try:
         from app.database import async_session_factory
-        from app.models.schemas import AppState
+        from app.models.models import AppState
         from datetime import datetime, timezone
         async with async_session_factory() as db:
             existing = await db.get(AppState, KEY_DRIVE_ARCHIVE_FOLDER)

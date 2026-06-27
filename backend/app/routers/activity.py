@@ -14,7 +14,7 @@ from sqlalchemy import func, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.schemas import ActivityLog
+from app.models.models import ActivityLog
 
 router = APIRouter(tags=["activity"])
 

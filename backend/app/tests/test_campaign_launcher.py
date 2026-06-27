@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models.schemas import Campaign, Deal, Buyer
+from app.models.models import Campaign, Deal, Buyer
 from app.services import campaign_launcher as cl
 
 

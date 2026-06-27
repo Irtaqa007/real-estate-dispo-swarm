@@ -18,7 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.schemas import Buyer, Campaign, Deal, QueuedDealMatch
+from app.models.models import Buyer, Campaign, Deal, QueuedDealMatch
 from app.schemas import BuyerMatchResult
 from app.services.campaign_launcher import launch_campaign_for_buyer
 
@@ -339,7 +339,7 @@ async def process_queued_matches(
                 continue
 
             # Re-check hard filters against current buyer data
-            from app.models.schemas import Buyer
+            from app.models.models import Buyer
             buyer = await db.get(Buyer, buyer_id)
             if not buyer or buyer.status != "Active" or buyer.buy_box_embedding is None:
                 match.status = "invalidated"
@@ -433,7 +433,7 @@ async def trigger_release_for_deal_async(deal_id: UUID) -> int:
         Number of queued matches released.
     """
     from app.database import async_session_factory
-    from app.models.schemas import Campaign
+    from app.models.models import Campaign
 
     async with async_session_factory() as db:
         try:

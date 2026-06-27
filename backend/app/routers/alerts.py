@@ -15,7 +15,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.schemas import ActivityLog
+from app.models.models import ActivityLog
 from app.schemas import ContractAlertItem, ContractAlertResolveRequest
 
 logger = logging.getLogger(__name__)

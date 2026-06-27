@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import Buyer, Campaign, Deal
+from app.models.models import Buyer, Campaign, Deal
 from app.services.groq_client import groq_chat_completion
 
 logger = logging.getLogger(__name__)

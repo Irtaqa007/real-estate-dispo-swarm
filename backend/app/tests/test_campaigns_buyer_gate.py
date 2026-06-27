@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models.schemas import Buyer, Campaign, Deal, JVPartner
+from app.models.models import Buyer, Campaign, Deal, JVPartner
 from app.routers import campaigns as campaigns_router
 from app.schemas import BuyerMatchResult
 

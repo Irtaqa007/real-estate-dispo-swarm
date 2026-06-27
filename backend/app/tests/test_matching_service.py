@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from uuid import UUID
 
-from app.models.schemas import Buyer, Campaign, Deal, QueuedDealMatch
+from app.models.models import Buyer, Campaign, Deal, QueuedDealMatch
 from app.services import matching_service as ms
 
 

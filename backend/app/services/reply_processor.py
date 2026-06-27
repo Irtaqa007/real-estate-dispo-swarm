@@ -40,7 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, JVPartner
+from app.models.models import ActivityLog, Buyer, Campaign, Deal, JVPartner
 from datetime import datetime, timedelta, timezone
 
 from app.services.ai_validator import validate_ai_output
@@ -48,7 +48,7 @@ from app.services.audit_logger import audit
 from app.services.gmail_service import send_email
 from app.services.groq_client import groq_chat_completion
 from app.services.pass_reason_extractor import extract_pass_reason
-from app.models.schemas import BuyerReengagementSchedule
+from app.models.models import BuyerReengagementSchedule
 
 logger = logging.getLogger(__name__)
 

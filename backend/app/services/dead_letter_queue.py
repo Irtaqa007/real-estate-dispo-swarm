@@ -14,7 +14,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import Campaign, FailedCampaign
+from app.models.models import Campaign, FailedCampaign
 from app.services.gmail_service import send_email as send_email_resilient
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ async def retry_failed_campaign(
         }
 
     # Fetch the buyer for their email
-    from app.models.schemas import Buyer
+    from app.models.models import Buyer
     buyer = await db.get(Buyer, campaign.buyer_id)
     if not buyer or not buyer.email:
         return {

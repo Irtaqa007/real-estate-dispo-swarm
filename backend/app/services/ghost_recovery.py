@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from app.config import settings
-from app.models.schemas import Buyer, Campaign, Deal
+from app.models.models import Buyer, Campaign, Deal
 from app.services.ai_validator import validate_ai_output
 from app.services.groq_client import groq_chat_completion
 

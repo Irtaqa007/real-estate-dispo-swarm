@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.schemas import Deal
+from app.models.models import Deal
 from app.schemas import MatchResponse
 from app.services.matching_service import find_top_matches_for_deal
 

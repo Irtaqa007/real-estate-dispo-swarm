@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import JVPartner
+from app.models.models import JVPartner
 
 logger = logging.getLogger(__name__)
 

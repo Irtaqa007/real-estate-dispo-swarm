@@ -11,7 +11,7 @@ import logging
 from typing import Optional
 
 from app.config import settings
-from app.models.schemas import Deal
+from app.models.models import Deal
 from app.services.ai_validator import ValidationResult, validate_ai_output
 from app.services.groq_client import groq_chat_completion
 

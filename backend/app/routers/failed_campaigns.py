@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.schemas import Buyer, Campaign, FailedCampaign
+from app.models.models import Buyer, Campaign, FailedCampaign
 from app.schemas import FailedCampaignResponse, FailedCampaignRetryResponse
 from app.services.dead_letter_queue import retry_failed_campaign
 

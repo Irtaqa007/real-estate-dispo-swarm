@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.models.schemas import Buyer, Campaign, Deal
+from app.models.models import Buyer, Campaign, Deal
 from app.services.groq_client import groq_chat_completion
 
 logger = logging.getLogger(__name__)

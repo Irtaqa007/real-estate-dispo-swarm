@@ -30,7 +30,7 @@ class MockGroqResponse:
 async def test_detect_september_window():
     """'I'll be ready in September' should create a waiting record with Sept target."""
     from app.services.reply_processor import detect_future_buying_window
-    from app.models.schemas import BuyerReengagementSchedule
+    from app.models.models import BuyerReengagementSchedule
 
     mock_db = AsyncMock()
     mock_db.add.return_value = None
@@ -77,7 +77,7 @@ async def test_detect_september_window():
 async def test_detect_three_months_window():
     """'Check back in 3 months' should set target_date ~90 days from now."""
     from app.services.reply_processor import detect_future_buying_window
-    from app.models.schemas import BuyerReengagementSchedule
+    from app.models.models import BuyerReengagementSchedule
 
     mock_db = AsyncMock()
     mock_db.add.return_value = None
@@ -210,7 +210,7 @@ def _make_async_session_mock(db_mock: MagicMock) -> MagicMock:
 async def test_fire_skips_inactive_buyer():
     """fire_buyer_reengagements should skip buyers who are inactive."""
     from app.services.scheduler import fire_buyer_reengagements
-    from app.models.schemas import Buyer, BuyerReengagementSchedule, Deal
+    from app.models.models import Buyer, BuyerReengagementSchedule, Deal
 
     buyer_id = uuid.uuid4()
     schedule_id = uuid.uuid4()
@@ -268,7 +268,7 @@ async def test_fire_skips_inactive_buyer():
 async def test_fire_creates_no_deal_found():
     """fire_buyer_reengagements should mark 'no_deal_found' when no active deal exists."""
     from app.services.scheduler import fire_buyer_reengagements
-    from app.models.schemas import Buyer, BuyerReengagementSchedule, Deal
+    from app.models.models import Buyer, BuyerReengagementSchedule, Deal
 
     buyer_id = uuid.uuid4()
     schedule_id = uuid.uuid4()
@@ -330,7 +330,7 @@ async def test_fire_creates_no_deal_found():
 async def test_fire_queues_at_cap():
     """fire_buyer_reengagements should queue as QueuedDealMatch when buyer is at 2-deal cap."""
     from app.services.scheduler import fire_buyer_reengagements
-    from app.models.schemas import Buyer, BuyerReengagementSchedule, Deal, QueuedDealMatch
+    from app.models.models import Buyer, BuyerReengagementSchedule, Deal, QueuedDealMatch
 
     buyer_id = uuid.uuid4()
     schedule_id = uuid.uuid4()
@@ -411,7 +411,7 @@ async def test_fire_queues_at_cap():
 async def test_idempotency_skip_existing_campaign():
     """Running twice should only fire once — existing campaign check catches it."""
     from app.services.scheduler import fire_buyer_reengagements
-    from app.models.schemas import Buyer, BuyerReengagementSchedule, Deal, Campaign
+    from app.models.models import Buyer, BuyerReengagementSchedule, Deal, Campaign
 
     buyer_id = uuid.uuid4()
     schedule_id = uuid.uuid4()

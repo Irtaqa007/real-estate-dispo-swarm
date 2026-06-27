@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import engine, get_db
-from app.models.schemas import Campaign, FailedCampaign
+from app.models.models import Campaign, FailedCampaign
 from app.services.circuit_breaker import gmail_circuit_breaker
 from app.services.embeddings import check_cohere_health
 from app.services.groq_client import get_rate_limit_status, groq_chat_completion

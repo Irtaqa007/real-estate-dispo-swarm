@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import ActivityLog
+from app.models.models import ActivityLog
 
 logger = logging.getLogger(__name__)
 

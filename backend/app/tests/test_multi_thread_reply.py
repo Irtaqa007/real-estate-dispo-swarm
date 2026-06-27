@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.config import settings
-from app.models.schemas import Buyer, Campaign, Deal
+from app.models.models import Buyer, Campaign, Deal
 
 
 # ===========================================================================

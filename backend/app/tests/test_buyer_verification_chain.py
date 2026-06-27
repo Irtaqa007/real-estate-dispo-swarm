@@ -12,7 +12,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
-from app.models.schemas import Buyer
+from app.models.models import Buyer
 from app.routers import buyers as buyers_router
 
 

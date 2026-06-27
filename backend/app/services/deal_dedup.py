@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import Deal
+from app.models.models import Deal
 from app.services.embeddings import generate_embedding
 
 logger = logging.getLogger(__name__)

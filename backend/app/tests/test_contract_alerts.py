@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, JVPartner
+from app.models.models import ActivityLog, Buyer, Campaign, Deal, JVPartner
 
 
 # ==========================================================================

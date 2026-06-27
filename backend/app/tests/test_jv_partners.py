@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from app.routers import jv_partners as jv_router
 from app.schemas import JVPartnerCreate, JVPartnerUpdate, JVPartnerResponse, DealCreate
-from app.models.schemas import JVPartner
+from app.models.models import JVPartner
 
 
 # ===========================================================================

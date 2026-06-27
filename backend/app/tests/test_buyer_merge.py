@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 from typing import Optional
 from uuid import UUID
 
-from app.models.schemas import Buyer, BuyerEmail
+from app.models.models import Buyer, BuyerEmail
 from app.services import buyer_merge as bm
 
 

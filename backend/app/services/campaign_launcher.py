@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import Campaign, Deal, QueuedDealMatch
+from app.models.models import Campaign, Deal, QueuedDealMatch
 from app.services.email_generator import generate_touch_email, TOUCH_CONFIGS
 from app.services.ai_validator import ValidationResult, validate_ai_output
 from app.services.gmail_service import send_email

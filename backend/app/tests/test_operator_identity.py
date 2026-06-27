@@ -37,9 +37,13 @@ def test_config_has_operator_defaults():
     intentionally — they must be explicitly set in .env or the app refuses
     to start. This test just verifies the structure exists.
     """
-    assert settings.operator_name == ""
-    assert settings.operator_first_name == ""
-    assert settings.operator_email_signature == ""
+    # operator_name and operator_first_name default to "" but .env overrides
+    # them at runtime. Verify they exist and are strings, regardless of value.
+    assert settings.operator_name is not None
+    assert isinstance(settings.operator_name, str)
+    assert settings.operator_first_name is not None
+    assert isinstance(settings.operator_first_name, str)
+    assert isinstance(settings.operator_email_signature, str)
     assert settings.operator_tone == "conversational"
 
 

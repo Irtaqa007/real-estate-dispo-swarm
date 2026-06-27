@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from app.config import settings
-from app.models.schemas import Buyer, Deal
+from app.models.models import Buyer, Deal
 from app.services.audit_logger import audit
 from app.services.groq_client import groq_chat_completion
 

@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models.schemas import ActivityLog, Buyer, BuyerEmail, Campaign, EmailVerification
+from app.models.models import ActivityLog, Buyer, BuyerEmail, Campaign, EmailVerification
 from app.schemas import BuyerCreate, BuyerResponse, BuyerUpdate
 from app.services.buyer_merge import find_duplicate_buyer, merge_new_into_existing_buyer
 from app.services.email_verification import verify_email

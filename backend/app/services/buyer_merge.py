@@ -14,7 +14,7 @@ from uuid import UUID
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import Buyer, BuyerEmail
+from app.models.models import Buyer, BuyerEmail
 from app.services.audit_logger import audit
 from app.services.embeddings import generate_embedding
 from app.services.groq_client import groq_chat_completion

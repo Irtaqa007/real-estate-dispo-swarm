@@ -27,7 +27,7 @@ def test_mark_paid_on_sold_deal():
     # SQLAlchemy Column(default=False) only applies at DB insert time,
     # not when creating model instances directly.
     # So drive_archived and payment_confirmed will be None until set.
-    from app.models.schemas import Deal
+    from app.models.models import Deal
 
     now = datetime.now(timezone.utc)
     deal = Deal(
@@ -55,7 +55,7 @@ def test_mark_paid_on_sold_deal():
 
 def test_mark_paid_on_under_contract_deal():
     """mark-paid on Under Contract deal should set status to Sold."""
-    from app.models.schemas import Deal
+    from app.models.models import Deal
 
     deal = Deal(
         id=uuid.uuid4(),
@@ -106,7 +106,7 @@ def test_mark_paid_available_deal_returns_400():
 
 def test_mark_paid_no_drive_folder():
     """mark-paid on deal with no drive_folder_id confirms payment without archiving."""
-    from app.models.schemas import Deal
+    from app.models.models import Deal
 
     now = datetime.now(timezone.utc)
     deal = Deal(
@@ -134,7 +134,7 @@ def test_mark_paid_no_drive_folder():
 
 def test_drive_failure_still_confirms_payment():
     """Drive API failure should not prevent payment confirmation."""
-    from app.models.schemas import Deal
+    from app.models.models import Deal
 
     deal = Deal(
         id=uuid.uuid4(),
@@ -165,7 +165,7 @@ def test_drive_failure_still_confirms_payment():
 
 def test_revenue_dashboard_totals():
     """Revenue dashboard should return correct totals for confirmed vs pending."""
-    from app.models.schemas import Deal
+    from app.models.models import Deal
 
     now = datetime.now(timezone.utc)
     confirmed_deal = Deal(

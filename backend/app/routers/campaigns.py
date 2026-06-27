@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db, async_session_factory
-from app.models.schemas import ActivityLog, Buyer, BuyerEmail, Campaign, Deal, JVPartner
+from app.models.models import ActivityLog, Buyer, BuyerEmail, Campaign, Deal, JVPartner
 from app.schemas import (
     CampaignLaunchResponse,
     CampaignLaunchResult,

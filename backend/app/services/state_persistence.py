@@ -25,7 +25,7 @@ from sqlalchemy import select
 
 import app.database as _db
 from app.config import settings
-from app.models.schemas import AppState
+from app.models.models import AppState
 
 logger = logging.getLogger(__name__)
 

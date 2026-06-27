@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 import app.database as _db
 from app.config import settings
-from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, FailedCampaign, JVPartner
+from app.models.models import ActivityLog, Buyer, Campaign, Deal, FailedCampaign, JVPartner
 from app.services.dead_letter_queue import retry_failed_campaign
 from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
@@ -41,13 +41,13 @@ from app.services.state_persistence import (
 from app.services.ghost_recovery import generate_ghost_recovery_email
 from app.services.ai_validator import ValidationResult, validate_ai_output
 from app.services.email_generator import generate_touch_email
-from app.models.schemas import BuyerReengagementSchedule
+from app.models.models import BuyerReengagementSchedule
 from app.services.circuit_breaker import gmail_circuit_breaker, get_cb_queue
 from app.services.matching_service import process_queued_matches, invalidate_queued_matches_for_buyer, match_all_active_deals
 from app.services.resilience import get_metrics, get_idempotency_store
 from app.services.groq_client import get_call_count_today, get_calls_today_date
 from app.services.buyer_merge import merge_buy_boxes
-from app.models.schemas import BuyerEmail
+from app.models.models import BuyerEmail
 from app.services.parse_buy_box import parse_buy_box
 
 logger = logging.getLogger(__name__)
@@ -1389,7 +1389,7 @@ async def fire_buyer_reengagements() -> int:
                     active_count = await get_active_deal_count_for_buyer(db, schedule.buyer_id)
                     if active_count >= 2:
                         # Queue as QueuedDealMatch instead
-                        from app.models.schemas import QueuedDealMatch
+                        from app.models.models import QueuedDealMatch
                         existing_qm = await db.execute(
                             select(QueuedDealMatch).where(
                                 QueuedDealMatch.buyer_id == schedule.buyer_id,

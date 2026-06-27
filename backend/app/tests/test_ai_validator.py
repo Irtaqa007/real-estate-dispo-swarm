@@ -362,7 +362,8 @@ async def test_valid_email_passes():
     result = await validate_ai_output(
         content=(
             f"Hi Investor, this 3-bedroom property at 123 Test St in "
-            f"Dallas, TX is a great value at $250,000. {first_name}"
+            f"Dallas, TX is a great value at $250,000. {first_name}\n\n"
+            f"{settings.operator_email_signature}"
         ),
         content_type="campaign_email",
     )

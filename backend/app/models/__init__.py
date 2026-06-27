@@ -1,4 +1,4 @@
-from app.models.schemas import (
+from app.models.models import (
     ActivityLog,
     AppState,
     Buyer,
