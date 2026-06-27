@@ -17,6 +17,7 @@ import {
   Clock,
   Ban,
   ChevronDown,
+  Upload,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -426,6 +427,327 @@ function ViewModal({
 }
 
 // ---------------------------------------------------------------------------
+// Bulk import modal
+// ---------------------------------------------------------------------------
+
+function BulkImportModal({
+  open,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [jsonText, setJsonText] = useState("");
+  const [bulkTier, setBulkTier] = useState("C-List");
+  const [parsed, setParsed] = useState<any[] | null>(null);
+  const [parseErrors, setParseErrors] = useState<string[]>([]);
+  const [validCount, setValidCount] = useState(0);
+  const [importing, setImporting] = useState(false);
+  const [importResults, setImportResults] = useState<
+    Array<{ index: number; name: string; status: "pending" | "success" | "error"; message?: string }>
+  >([]);
+  const [importComplete, setImportComplete] = useState(false);
+  const [importSummary, setImportSummary] = useState({ success: 0, failed: 0 });
+
+  // Parse and validate JSON as the user types
+  useEffect(() => {
+    if (!jsonText.trim()) {
+      setParsed(null);
+      setParseErrors([]);
+      setValidCount(0);
+      return;
+    }
+
+    try {
+      const arr = JSON.parse(jsonText);
+      if (!Array.isArray(arr)) {
+        setParsed(null);
+        setParseErrors(["Input must be a JSON array"]);
+        setValidCount(0);
+        return;
+      }
+
+      const errors: string[] = [];
+      let valid = 0;
+
+      for (let i = 0; i < arr.length; i++) {
+        const item = arr[i];
+        if (!item.full_name || !String(item.full_name).trim()) {
+          errors.push(`Row ${i + 1}: missing full_name`);
+        } else if (!item.email || !String(item.email).trim()) {
+          errors.push(`Row ${i + 1} (${item.full_name}): missing email`);
+        } else if (!/\S+@\S+\.\S+/.test(String(item.email))) {
+          errors.push(`Row ${i + 1} (${item.full_name}): invalid email format`);
+        } else if (!item.buy_box || !String(item.buy_box).trim()) {
+          errors.push(`Row ${i + 1} (${item.full_name}): missing buy_box`);
+        } else {
+          valid++;
+        }
+      }
+
+      setParsed(arr);
+      setParseErrors(errors);
+      setValidCount(valid);
+    } catch (e: any) {
+      setParsed(null);
+      setParseErrors([`Invalid JSON — ${e.message}`]);
+      setValidCount(0);
+    }
+  }, [jsonText]);
+
+  // Reset state when modal opens
+  useEffect(() => {
+    if (open) {
+      setJsonText("");
+      setBulkTier("C-List");
+      setParsed(null);
+      setParseErrors([]);
+      setValidCount(0);
+      setImporting(false);
+      setImportResults([]);
+      setImportComplete(false);
+      setImportSummary({ success: 0, failed: 0 });
+    }
+  }, [open]);
+
+  async function handleImport() {
+    if (!parsed || validCount === 0) return;
+
+    setImporting(true);
+    const results: Array<{ index: number; name: string; status: "pending" | "success" | "error"; message?: string }> =
+      parsed.map((item, i) => ({
+        index: i,
+        name: item.full_name || `Row ${i + 1}`,
+        status: "pending" as const,
+      }));
+    setImportResults(results);
+
+    let success = 0;
+    let failed = 0;
+
+    for (let i = 0; i < parsed.length; i++) {
+      const item = parsed[i];
+
+      // Skip rows that failed pre-validation
+      if (!item.full_name?.trim() || !item.email?.trim() || !/\S+@\S+\.\S+/.test(item.email) || !item.buy_box?.trim()) {
+        results[i] = { ...results[i], status: "error", message: "Validation failed" };
+        failed++;
+        setImportResults([...results]);
+        continue;
+      }
+
+      try {
+        const body: Record<string, string> = {
+          full_name: item.full_name.trim(),
+          email: item.email.trim(),
+          buy_box: item.buy_box.trim(),
+          buyer_tier: bulkTier,
+          status: "Active",
+        };
+        if (item.affiliation?.trim()) {
+          body.affiliation = item.affiliation.trim();
+        }
+
+        await apiFetch("/api/buyers", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        results[i] = { ...results[i], status: "success" };
+        success++;
+      } catch (err: any) {
+        results[i] = { ...results[i], status: "error", message: err.message };
+        failed++;
+      }
+
+      setImportResults([...results]);
+    }
+
+    setImportSummary({ success, failed });
+    setImportComplete(true);
+    setImporting(false);
+  }
+
+  useEffect(() => {
+    if (open) {
+      const handler = (e: KeyboardEvent) => {
+        if (e.key === "Escape") onClose();
+      };
+      document.addEventListener("keydown", handler);
+      return () => document.removeEventListener("keydown", handler);
+    }
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const inputCls =
+    "w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-800/50 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-colors";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700/50 bg-slate-900 shadow-2xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/50">
+          <h2 className="text-lg font-semibold text-white">Bulk Import Buyers</h2>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="px-6 py-4 space-y-4">
+          {/* JSON textarea */}
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-1.5">Paste JSON Array</label>
+            <textarea
+              className={`${inputCls} font-mono min-h-[200px] resize-y`}
+              placeholder={`[\n  {\n    "full_name": "Danny Charbel",\n    "email": "danny@dannycharbel.com",\n    "affiliation": "Keller Williams City View",\n    "buy_box": "Investor-focused agent..."\n  }\n]`}
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              disabled={importing}
+              spellCheck={false}
+            />
+          </div>
+
+          {/* Live validation preview */}
+          {jsonText.trim() && (
+            <div>
+              {parseErrors.length === 0 && validCount > 0 ? (
+                <p className="text-sm text-emerald-400">
+                  {validCount} buyer{validCount !== 1 ? "s" : ""} ready to import
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {parseErrors.map((err, i) => (
+                    <p key={i} className="text-sm text-red-400">
+                      {err}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tier selector for all imported buyers */}
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-1.5">
+              Set Tier for All Imported Buyers
+            </label>
+            <div className="relative w-48">
+              <select
+                className="appearance-none w-full pl-3 pr-8 py-2 rounded-lg border border-slate-700 bg-slate-800/50 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-colors"
+                value={bulkTier}
+                onChange={(e) => setBulkTier(e.target.value)}
+                disabled={importing}
+              >
+                {TIERS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Import progress / results list */}
+          {importResults.length > 0 && (
+            <div className="max-h-[240px] overflow-y-auto space-y-1 border border-slate-700/50 rounded-lg p-3 bg-slate-800/30">
+              {importResults.map((r) => (
+                <div key={r.index} className="flex items-center gap-2 text-sm">
+                  {r.status === "pending" && (
+                    <svg className="animate-spin h-3.5 w-3.5 text-blue-400 shrink-0" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
+                  {r.status === "success" && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                  {r.status === "error" && <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                  <span
+                    className={
+                      r.status === "pending"
+                        ? "text-slate-400"
+                        : r.status === "success"
+                          ? "text-white"
+                          : "text-red-300"
+                    }
+                  >
+                    {r.name}
+                  </span>
+                  {r.status === "error" && r.message && (
+                    <span className="text-xs text-red-400/80 ml-1">— {r.message}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Summary after import complete */}
+          {importComplete && (
+            <div className="flex items-center gap-2 text-sm">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <span className="text-emerald-400">{importSummary.success} imported successfully</span>
+              {importSummary.failed > 0 && (
+                <>
+                  <span className="text-slate-500">·</span>
+                  <AlertCircle className="w-4 h-4 text-red-400" />
+                  <span className="text-red-400">{importSummary.failed} failed</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Footer actions */}
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-700/50">
+            {importComplete ? (
+              <button
+                onClick={() => {
+                  onClose();
+                  onImported();
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 transition-colors"
+              >
+                Close
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={onClose}
+                  disabled={importing}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleImport}
+                  disabled={importing || validCount === 0}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {importing ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Importing... {importResults.filter((r) => r.status !== "pending").length} of{" "}
+                      {parsed?.length || 0}
+                    </>
+                  ) : (
+                    `Import ${validCount} Buyer${validCount !== 1 ? "s" : ""}`
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -446,6 +768,7 @@ export default function BuyersPage() {
 
   // Modal state
   const [addOpen, setAddOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Buyer | null>(null);
   const [viewTarget, setViewTarget] = useState<Buyer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Buyer | null>(null);
@@ -645,13 +968,22 @@ export default function BuyersPage() {
               {filtered.length !== buyers.length && ` (filtered from ${buyers.length})`}
             </p>
           </div>
-          <button
-            onClick={openAdd}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 active:bg-blue-600 transition-colors shadow-lg shadow-blue-600/20"
-          >
-            <Plus className="w-4 h-4" />
-            Add Buyer
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setBulkOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700/50 transition-colors"
+            >
+              <Upload className="w-4 h-4" />
+              Bulk Import
+            </button>
+            <button
+              onClick={openAdd}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 active:bg-blue-600 transition-colors shadow-lg shadow-blue-600/20"
+            >
+              <Plus className="w-4 h-4" />
+              Add Buyer
+            </button>
+          </div>
         </div>
       </header>
 
@@ -960,6 +1292,13 @@ export default function BuyersPage() {
         name={deleteTarget?.full_name || ""}
         onConfirm={handleDelete}
         deleting={deleting}
+      />
+
+      {/* Bulk Import Modal */}
+      <BulkImportModal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        onImported={loadBuyers}
       />
     </div>
   );
