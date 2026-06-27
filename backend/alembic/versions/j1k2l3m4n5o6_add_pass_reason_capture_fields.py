@@ -1,4 +1,4 @@
-\"\"\"Add pass reason capture fields to Campaign, Deal, and JVPartner.
+"""Add pass reason capture fields to Campaign, Deal, and JVPartner.
 
 This migration adds:
 - Campaign: pass_reason_category, pass_reason_raw, pass_reason_confidence, passed_at
@@ -8,8 +8,7 @@ This migration adds:
 Revision ID: j1k2l3m4n5o6
 Revises: i9e5f7g8h0i1
 Create Date: 2026-06-25 22:00:00.000000
-\"\"\"
-
+"""
 from typing import Sequence, Union
 
 from alembic import op
