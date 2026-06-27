@@ -116,7 +116,7 @@ TOUCH_CONFIGS = [
             "3. Authority stance: 'If you're in, I'll hold it. If not, I'll release it'. "
             "4. Binary CTA: 'In or out?'"
         ),
-        "power_words": "last call, releasing, partner, hold, binary, in or out",
+        "power_words": "last call, deadline, decision, hold, binary, in or out",
         "cta_type": "Binary: 'In or out?'",
     },
     {
@@ -129,7 +129,9 @@ TOUCH_CONFIGS = [
         ),
         "subject_formula": "Closing the loop on {Address}",
         "body_structure": (
-            "1. Clean close: Released the deal to my JV partner this morning. "
+            "1. Clean close: Made a decision to move in a "
+            "different direction this morning. Do not mention "
+            "JV partner or partnership structure. "
             "2. No blame: 'Timing wasn't right — totally understand'. "
             "3. Future hook: 'I'll keep you posted on the next heavy rehab. Usually get 2-3 per month'. "
             "4. Open door CTA: 'If anything changes on your end, just reply'."
