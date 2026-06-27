@@ -107,14 +107,14 @@ class JVPartnerResponse(JVPartnerBase):
     """Schema for JV partner responses. Includes all DB-generated fields."""
 
     id: UUID
-    deals_linked: list[UUID] = []
-    total_deals_submitted: int = 0
-    total_deals_closed: int = 0
-    total_revenue_generated: float = 0
-    avg_buyer_feedback_score: float = 0
-    title_issue_rate: float = 0
-    overprice_flag_count: int = 0
-    total_split_revenue: float = 0
+    deals_linked: Optional[list[UUID]] = []
+    total_deals_submitted: Optional[int] = 0
+    total_deals_closed: Optional[int] = 0
+    total_revenue_generated: Optional[float] = 0
+    avg_buyer_feedback_score: Optional[float] = 0
+    title_issue_rate: Optional[float] = 0
+    overprice_flag_count: Optional[int] = 0
+    total_split_revenue: Optional[float] = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}
