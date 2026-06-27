@@ -52,6 +52,8 @@ interface Deal {
   assigned_buyer_id: string | null;
   closed_at: string | null;
   closed_price: number | null;
+  my_payout: number | null;
+  jv_split_percentage: number | null;
   created_at: string;
 }
 
@@ -74,6 +76,16 @@ interface Campaign {
   sent_at: string | null;
   reply_received_at: string | null;
   reply_intent: string | null;
+}
+
+interface SendingStatus {
+  sends_today: number;
+  daily_cap: number;
+  remaining: number;
+  percent_used: number;
+  cap_hit: boolean;
+  warning_threshold_hit: boolean;
+  resets_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +128,7 @@ const statusConfig: Record<string, { label: string; dot: string }> = {
   Sold: { label: "Sold", dot: "bg-purple-400" },
   Dead: { label: "Dead", dot: "bg-red-400" },
   "Campaign Launched": { label: "Campaign Launched", dot: "bg-amber-400" },
+  Contract_Pending: { label: "Contract Pending", dot: "bg-sky-400" },
 };
 
 function StatusDot({ status }: { status: string }) {
@@ -136,6 +149,7 @@ export default function Dashboard() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [sendingStatus, setSendingStatus] = useState<SendingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,14 +157,16 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [dealsData, buyersData, campaignsData] = await Promise.all([
+      const [dealsData, buyersData, campaignsData, sendingData] = await Promise.all([
         apiFetch<Deal[]>("/api/deals"),
         apiFetch<Buyer[]>("/api/buyers"),
         apiFetch<Campaign[]>("/api/campaigns"),
+        apiFetch<SendingStatus>("/api/sending/status").catch(() => null),
       ]);
       setDeals(dealsData);
       setBuyers(buyersData);
       setCampaigns(campaignsData);
+      setSendingStatus(sendingData);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -181,8 +197,14 @@ export default function Dashboard() {
     ? Math.round((repliesReceived.length / sentCampaigns.length) * 100)
     : 0;
 
-  const totalPotentialSpread = activeDeals.reduce((sum, d) => sum + (d.spread || 0), 0);
-  const totalEarned = soldDeals.reduce((sum, d) => sum + (d.closed_price || 0) - (d.contract_price || 0), 0);
+  const totalPotentialSpread = activeDeals.reduce((sum, d) => {
+    const spread = d.spread || 0;
+    const myShare = d.jv_split_percentage != null
+      ? spread * (1 - d.jv_split_percentage / 100)
+      : spread * 0.5;
+    return sum + myShare;
+  }, 0);
+  const totalEarned = soldDeals.reduce((sum, d) => sum + (d.my_payout || 0), 0);
 
   // Monthly trend data
   const monthlyMap = new Map<string, { month: string; sortKey: string; deals: number; spread: number }>();
@@ -262,6 +284,18 @@ export default function Dashboard() {
             <h2 className="text-lg font-semibold text-white">Pipeline Overview</h2>
           </div>
 
+          {/* Gmail send quota status bar */}
+          {sendingStatus && sendingStatus.cap_hit && (
+            <div className="mt-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-2.5 text-sm flex items-center gap-2">
+              <span>🚫 Daily email cap reached ({sendingStatus.sends_today}/{sendingStatus.daily_cap}). Campaign sends paused. Resets at {new Date(sendingStatus.resets_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}. Reply emails still sending.</span>
+            </div>
+          )}
+          {sendingStatus && !sendingStatus.cap_hit && sendingStatus.warning_threshold_hit && (
+            <div className="mt-4 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-2.5 text-sm flex items-center gap-2">
+              <span>⚡ {sendingStatus.sends_today}/{sendingStatus.daily_cap} emails sent today — {sendingStatus.remaining} remaining. Resets at {new Date(sendingStatus.resets_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}.</span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
             <StatCard
               title="Active Deals"
@@ -291,7 +325,7 @@ export default function Dashboard() {
             <StatCard
               title="Total Value"
               value={formatCurrency(totalEarned + totalPotentialSpread)}
-              subtitle={`${formatCurrency(totalEarned)} earned`}
+              subtitle={`${formatCurrency(totalEarned)} your cut earned`}
               icon={<DollarSign className="w-4 h-4" />}
               color="purple"
               delay={150}

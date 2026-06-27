@@ -102,6 +102,18 @@ interface CampaignLaunchResult {
   total_campaigns_created: number;
 }
 
+interface MatchResult {
+  deal_id: string;
+  deal_address: string;
+  matches: Array<{
+    id: string;
+    full_name: string;
+    email: string;
+    buyer_tier: string;
+    similarity: number;
+  }>;
+}
+
 interface DealFormData {
   address: string;
   city: string;
@@ -191,6 +203,7 @@ const statusConfig: Record<string, { label: string; bg: string; dot: string }> =
   Sold: { label: "Sold", bg: "bg-purple-500/10 text-purple-400", dot: "bg-purple-400" },
   Dead: { label: "Dead", bg: "bg-red-500/10 text-red-400", dot: "bg-red-400" },
   "Campaign Launched": { label: "Campaign Launched", bg: "bg-amber-500/10 text-amber-400", dot: "bg-amber-400" },
+  Contract_Pending: { label: "Contract Pending", bg: "bg-sky-500/10 text-sky-400", dot: "bg-sky-400" },
 };
 
 const propertyIcon: Record<string, React.ReactNode> = {
@@ -898,6 +911,22 @@ export default function DealsPage() {
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
 
+  // Match buyers state
+  const [matchResults, setMatchResults] = useState<Record<string, MatchResult>>({});
+  const [matchingDealId, setMatchingDealId] = useState<string | null>(null);
+  const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
+
+  // Toast
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   // -----------------------------------------------------------------------
   // Data fetching
   // -----------------------------------------------------------------------
@@ -1153,6 +1182,35 @@ export default function DealsPage() {
     }
   }
 
+  async function handleFindBuyers(dealId: string) {
+    setMatchingDealId(dealId);
+    try {
+      const result = await apiFetch<MatchResult>(`/api/match/${dealId}`, {
+        method: "POST",
+      });
+      setMatchResults(prev => ({ ...prev, [dealId]: result }));
+      setExpandedMatch(dealId);
+      if (result.matches.length > 0) {
+        setToast({
+          message: `Found ${result.matches.length} matching buyer${result.matches.length !== 1 ? "s" : ""} (top match: ${result.matches[0].full_name} at ${(result.matches[0].similarity * 100).toFixed(0)}%)`,
+          type: "success",
+        });
+      } else {
+        setToast({
+          message: "No matching buyers found for this deal",
+          type: "success",
+        });
+      }
+    } catch (err: any) {
+      setToast({
+        message: err.message || "Failed to find buyers",
+        type: "error",
+      });
+    } finally {
+      setMatchingDealId(null);
+    }
+  }
+
   async function handleCloseDeal() {
     if (!closeTarget) return;
     const price = Number(closePrice);
@@ -1258,6 +1316,27 @@ export default function DealsPage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+        {/* Toast */}
+        {toast && (
+          <div
+            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm ${
+              toast.type === "success"
+                ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                : "bg-red-500/10 border border-red-500/20 text-red-400"
+            }`}
+          >
+            {toast.type === "success" ? (
+              <CheckCircle2 className="w-5 h-5 shrink-0" />
+            ) : (
+              <AlertCircle className="w-5 h-5 shrink-0" />
+            )}
+            <span>{toast.message}</span>
+            <button onClick={() => setToast(null)} className="ml-auto hover:opacity-70 transition-opacity">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Error banner */}
         {error && (
           <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
@@ -1431,6 +1510,20 @@ export default function DealsPage() {
                             </button>
                             {(d.status === "Available" || d.status === "Campaign Launched") && (
                               <button
+                                onClick={() => handleFindBuyers(d.id)}
+                                disabled={matchingDealId === d.id}
+                                className="p-1.5 rounded-md text-slate-400 hover:text-cyan-400 hover:bg-slate-700 transition-colors disabled:opacity-30"
+                                title="Find Buyers"
+                              >
+                                {matchingDealId === d.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Users className="w-4 h-4" />
+                                )}
+                              </button>
+                            )}
+                            {(d.status === "Available" || d.status === "Campaign Launched") && (
+                              <button
                                 onClick={() => { setUcTarget(d); setUcBuyerId(d.assigned_buyer_id || ""); }}
                                 className="p-1.5 rounded-md text-slate-400 hover:text-blue-400 hover:bg-slate-700 transition-colors"
                                 title="Mark Under Contract"
@@ -1471,6 +1564,55 @@ export default function DealsPage() {
                         </td>
                       </tr>
                     ))}
+                    {/* Match results rows */}
+                    {paged.map((d) =>
+                      expandedMatch === d.id && matchResults[d.id] ? (
+                        <tr key={`match-${d.id}`}>
+                          <td colSpan={9} className="px-4 py-3 bg-slate-800/20">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">
+                                Matching Buyers {matchResults[d.id].matches.length > 0 ? `(${matchResults[d.id].matches.length} found)` : ""}
+                              </span>
+                              <button
+                                onClick={() => setExpandedMatch(null)}
+                                className="text-xs text-slate-500 hover:text-white transition-colors"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            {matchResults[d.id].matches.length === 0 ? (
+                              <p className="text-sm text-slate-500">No matching buyers found for this deal</p>
+                            ) : (
+                              <div className="grid gap-2">
+                                {matchResults[d.id].matches.slice(0, 3).map((m, idx) => (
+                                  <div
+                                    key={m.id}
+                                    className="flex items-center gap-3 px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/30"
+                                  >
+                                    <span className="w-5 h-5 rounded-full bg-cyan-500/10 flex items-center justify-center text-[10px] font-bold text-cyan-400 shrink-0">
+                                      {idx + 1}
+                                    </span>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-medium text-white truncate">{m.full_name}</p>
+                                      <p className="text-[10px] text-slate-500 truncate">{m.email}</p>
+                                    </div>
+                                    <span className="text-xs text-slate-400 shrink-0">{m.buyer_tier}</span>
+                                    <span className="text-xs font-medium text-cyan-400 shrink-0">
+                                      {(m.similarity * 100).toFixed(0)}%
+                                    </span>
+                                  </div>
+                                ))}
+                                {matchResults[d.id].matches.length > 3 && (
+                                  <p className="text-[10px] text-slate-600 text-center">
+                                    +{matchResults[d.id].matches.length - 3} more buyer{matchResults[d.id].matches.length - 3 !== 1 ? "s" : ""}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ) : null
+                    )}
                   </tbody>
                 </table>
               </div>
