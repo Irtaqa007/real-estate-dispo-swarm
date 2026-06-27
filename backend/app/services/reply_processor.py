@@ -14,7 +14,27 @@ import logging
 import re
 import uuid
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
+
+
+class ReplyClassification(TypedDict, total=False):
+    """Typed return structure for process_reply().
+
+    All keys are Optional (total=False) to maintain backward
+    compatibility with error-path fallback returns.
+    """
+    reply_intent: str              # Always present
+    urgency: str                   # Always present
+    sentiment: int                 # Always present
+    topics: list[str]              # Always present
+    recommended_action: str        # Always present
+    counter_price: Optional[float] # Present on Counter intent
+    question_answer: Optional[str] # Present on Question intent
+    ai_extracted_insights: str     # Always present
+    buyer_profile_updates: dict    # Always present
+    pass_reason_followup: Optional[str]  # Present on Pass
+    match_confidence: Optional[str]      # Set by caller
+    validation_blocked: Optional[bool]   # Set by validator
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,7 +122,7 @@ async def process_reply(
     db: Optional[AsyncSession] = None,
     buyer_id: Optional[uuid.UUID] = None,
     deal_id: Optional[uuid.UUID] = None,
-) -> dict:
+) -> ReplyClassification:
     """Use Groq AI to classify a buyer's reply with multi-dimensional intent.
 
     Args:

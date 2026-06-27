@@ -107,9 +107,11 @@ TOUCH_CONFIGS = [
             "Time pressure + authority commitment. 'I need to decide' transfers urgency "
             "to the buyer."
         ),
-        "subject_formula": "Last call: {Address} → releasing to partner tomorrow",
+        "subject_formula": "Last call: {Address} → decision deadline tomorrow",
         "body_structure": (
-            "1. Deadline clarity: Need to give JV partner yes/no by 5 PM tomorrow. "
+            "1. Deadline clarity: Need to make a final decision "
+            "on this deal by tomorrow. Frame it as your own "
+            "deadline — not a JV partner's. "
             "2. Final value reminder: ARV, asking, spread — one last time. "
             "3. Authority stance: 'If you're in, I'll hold it. If not, I'll release it'. "
             "4. Binary CTA: 'In or out?'"
@@ -119,7 +121,7 @@ TOUCH_CONFIGS = [
     },
     {
         "touch": 6,
-        "delay_days": 10,
+        "delay_days": 14,
         "arc": "Breakup + Future Commitment",
         "arc_description": (
             "15-25% reply rate on breakup emails. The 'loss' of the relationship "

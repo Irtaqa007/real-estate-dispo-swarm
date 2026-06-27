@@ -131,7 +131,6 @@ async def _check_daily_cap(send_type: str) -> bool:
     # ── Approaching-cap alert at 90% (once per day, DB-backed) ──
     if status["warning_threshold_hit"]:
         warning_sent_date = await get_gmail_cap_warning_sent()
-        from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if warning_sent_date != today:
             await save_gmail_cap_warning_sent(today)

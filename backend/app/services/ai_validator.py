@@ -112,12 +112,20 @@ def _check_sign_off(content: str, checks_run: list[str]) -> tuple[Optional[str],
     if not sign_off:
         return None, None, None
 
-    # Match on first name at minimum (case-insensitive)
-    first_name = settings.operator_first_name or settings.operator_name.split()[0]
-    if first_name.lower() in content.lower():
+    # Primary check: look for the full signature string
+    if sign_off.lower() in content.lower():
         return None, None, None
 
-    # Auto-correct by appending sign-off
+    # Secondary check: if sign-off is multi-line, check that the
+    # last line (typically the name) appears in the last 20% of
+    # the content (near the end, not in the greeting)
+    sign_off_last_line = sign_off.strip().split("\n")[-1].strip()
+    if sign_off_last_line:
+        content_tail = content[int(len(content) * 0.8):]
+        if sign_off_last_line.lower() in content_tail.lower():
+            return None, None, None
+
+    # Sign-off genuinely missing — auto-correct
     corrected = content.rstrip() + "\n\n" + sign_off
     return (
         f"Missing operator sign-off — auto-appended",
