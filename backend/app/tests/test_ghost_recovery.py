@@ -242,10 +242,15 @@ async def test_ghost_detection_fires_after_silence():
     terminal_result = MagicMock()
     terminal_result.first.return_value = None
 
+    buyer = MagicMock(spec=Buyer)
+    buyer.id = buyer_id
+    buyer.unsubscribed_at = None
+
     session, unpatch = patch_db(scheduler_mod)
     session.with_execute_results(distinct_result, terminal_result) \
            .with_scalar_results(sent_campaign, replied_campaign, replied_campaign) \
-           .with_get_result(Deal, deal.id, deal)
+           .with_get_result(Deal, deal.id, deal) \
+           .with_get_result(Buyer, buyer_id, buyer)
 
     try:
         result = await detect_and_flag_ghosts()

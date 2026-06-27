@@ -67,14 +67,18 @@ TOUCH_CONFIGS = [
             "Buyers trust validated opportunities. 'Others are looking' triggers "
             "FOMO without desperation."
         ),
-        "subject_formula": "{Address} — 2 buyers asked about this today",
+        "subject_formula": "{Address} — getting serious interest",
         "body_structure": (
             "1. Authority frame: 'Quick update from my desk'. "
-            "2. Social proof: Two cash buyers in network asked for walk-throughs. "
+            "2. Social proof: Reference genuine deal activity or market "
+            "demand without fabricating specific buyer counts. "
+            "Use language like 'this one is getting attention' or "
+            "'moving quickly in this market' — never invent specific "
+            "numbers of buyers or inquiries. "
             "3. Scarcity nudge: Haven't released it to the full list yet. "
             "4. Exclusivity CTA: 'Want first shot before I open it up?'"
         ),
-        "power_words": "network, cash buyers, walk-through, released, first shot, full list",
+        "power_words": "network, attention, moving, released, first shot, interest",
         "cta_type": "Exclusivity: 'Want first shot before I open it up?'",
     },
     {

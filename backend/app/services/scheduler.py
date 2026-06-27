@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 import app.database as _db
 from app.config import settings
-from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, FailedCampaign
+from app.models.schemas import ActivityLog, Buyer, Campaign, Deal, FailedCampaign, JVPartner
 from app.services.dead_letter_queue import retry_failed_campaign
 from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
@@ -360,7 +360,24 @@ async def process_buyer_replies() -> int:
                         logger.info("Scheduler: reply from unknown buyer %s — skipping", from_email)
                         continue
 
-                    # 4. Match reply to the correct campaign (thread-aware priority chain)
+                    # 4. Deduplication: skip if this Gmail message was already processed
+                    gmail_message_id = reply.get("message_id") or reply.get("id")
+                    if gmail_message_id:
+                        existing_log = await db.execute(
+                            select(ActivityLog).where(
+                                ActivityLog.action == "reply_received",
+                                ActivityLog.metadata_json["gmail_message_id"].astext
+                                    == gmail_message_id,
+                            ).limit(1)
+                        )
+                        if existing_log.scalar_one_or_none():
+                            logger.debug(
+                                "Scheduler: skipping already-processed reply %s",
+                                gmail_message_id,
+                            )
+                            continue
+
+                    # 5. Match reply to the correct campaign (thread-aware priority chain)
                     campaign, confidence_level = await match_reply_to_campaign(db, buyer_id, reply)
 
                     if not campaign:
@@ -534,6 +551,7 @@ async def process_buyer_replies() -> int:
                             "campaigns_paused": len(queued_campaigns),
                             "sentiment": classification.get("sentiment"),
                             "source": "scheduler",
+                            "gmail_message_id": gmail_message_id or "",
                         },
                     )
                     db.add(log_entry)
@@ -557,12 +575,111 @@ async def process_buyer_replies() -> int:
                                         campaign.deal_id, counter_price,
                                         negotiation_result["floor_price"],
                                     )
+                                    # ── Create contract-ready alert for auto-approved counter ──
+                                    try:
+                                        from app.services.jv_partners import get_jv_partner_for_contract
+                                        alert_meta = {
+                                            "alert_type": "contract_ready",
+                                            "alert_user": True,
+                                            "priority": "high",
+                                            "action_required": "Prepare and send contract manually",
+                                            "negotiated_price": counter_price,
+                                            "negotiation_auto_approved": True,
+                                            "source": "scheduler_counter_approval",
+                                            "buyer": {
+                                                "id": str(buyer_id),
+                                                "name": buyer_obj.full_name if buyer_obj else "Unknown",
+                                                "email": buyer_obj.email if buyer_obj else "Unknown",
+                                            },
+                                            "deal": {
+                                                "id": str(campaign.deal_id),
+                                                "address": deal.address,
+                                                "city": deal.city,
+                                                "state": deal.state,
+                                                "asking_price": float(deal.asking_price),
+                                                "contract_price": float(counter_price),
+                                                "my_payout": float(counter_price) - float(deal.contract_price or 0),
+                                            },
+                                            "suggested_next_steps": [
+                                                "Prepare and send assignment contract to buyer",
+                                                "CC the title company on the contract email",
+                                                "Update deal status to Under Contract after sending",
+                                                "Verify JV partner payout split",
+                                                "Schedule closing timeline",
+                                            ],
+                                        }
+                                        jv_partner = await db.get(JVPartner, deal.jv_partner_id) if deal.jv_partner_id else None
+                                        if jv_partner:
+                                            alert_meta["deal"]["jv_partner"] = jv_partner.name
+                                            alert_meta["deal"]["jv_partner_email"] = jv_partner.email
+                                        db.add(ActivityLog(
+                                            id=uuid.uuid4(),
+                                            entity_type="deal",
+                                            entity_id=campaign.deal_id,
+                                            action="contract_ready",
+                                            metadata_json=alert_meta,
+                                        ))
+                                        logger.info(
+                                            "Contract-ready alert created for deal %s (auto-approved counter $%.2f)",
+                                            campaign.deal_id, counter_price,
+                                        )
+                                    except Exception as alert_err:
+                                        logger.warning(
+                                            "Failed to create contract-ready alert for deal %s: %s",
+                                            campaign.deal_id, alert_err, exc_info=True,
+                                        )
                                 else:
                                     logger.info(
                                         "Scheduler: counter below floor for deal %s: $%.2f (floor: $%.2f)",
                                         campaign.deal_id, counter_price,
                                         negotiation_result["floor_price"],
                                     )
+
+                            # ── Send negotiation response to the buyer ──
+                            if negotiation_result and buyer_obj and buyer_obj.email:
+                                ai_response = negotiation_result.get("ai_response")
+                                if ai_response:
+                                    try:
+                                        validation_ok = True
+                                        send_body = ai_response
+                                        try:
+                                            val = await validate_ai_output(
+                                                content=ai_response,
+                                                content_type="negotiation_email",
+                                                deal=deal,
+                                                buyer=buyer_obj,
+                                            )
+                                            if val.severity == "block":
+                                                validation_ok = False
+                                                logger.error(
+                                                    "Negotiation response blocked by validator for buyer %s: %s",
+                                                    buyer_id, val.violations,
+                                                )
+                                            else:
+                                                send_body = val.corrected_content or ai_response
+                                        except Exception as val_err:
+                                            logger.warning(
+                                                "Validator failed for negotiation response, sending unvalidated: %s",
+                                                val_err,
+                                            )
+
+                                        if validation_ok:
+                                            await send_email(
+                                                to=buyer_obj.email,
+                                                subject=f"Re: {reply.get('subject', '')}",
+                                                body=send_body,
+                                                send_type="reply",
+                                            )
+                                            logger.info(
+                                                "Scheduler: negotiation response sent to buyer %s: %s",
+                                                buyer_id, negotiation_result["action"],
+                                            )
+                                    except Exception as neg_send_err:
+                                        logger.warning(
+                                            "Scheduler: failed to send negotiation response to buyer %s: %s",
+                                            buyer_id, neg_send_err, exc_info=True,
+                                        )
+
                         except Exception as e:
                             logger.warning(
                                 "Scheduler: smart negotiation failed for buyer %s, deal %s: %s",
@@ -681,27 +798,54 @@ async def process_buyer_replies() -> int:
                                     campaign.id, q_err, exc_info=True,
                                 )
 
-                    # 10c. Auto-send assignment contract if buyer is Interested
-                    if reply_intent == "Interested":
+                    # ── Send question answer to the buyer ──
+                    if reply_intent == "Question" and question_answer and buyer_obj and buyer_obj.email:
                         try:
-                            deal = await db.get(Deal, campaign.deal_id)
-                            if deal and buyer_obj:
-                                contract_result = await send_assignment_contract(
-                                    db=db,
-                                    deal=deal,
-                                    buyer_name=buyer_obj.full_name,
-                                    buyer_email=buyer_obj.email,
+                            validation_ok = True
+                            send_body = question_answer
+                            try:
+                                deal_for_q = await db.get(Deal, campaign.deal_id)
+                                val = await validate_ai_output(
+                                    content=question_answer,
+                                    content_type="reply_email",
+                                    deal=deal_for_q,
+                                    buyer=buyer_obj,
                                 )
-                                if contract_result.get("sent", False):
-                                    logger.info(
-                                        "Scheduler: assignment contract sent to %s for deal %s",
-                                        buyer_obj.email, deal.address,
+                                if val.severity == "block":
+                                    validation_ok = False
+                                    logger.error(
+                                        "Question answer blocked by validator for buyer %s: %s",
+                                        buyer_id, val.violations,
                                     )
-                        except Exception as e:
+                                else:
+                                    send_body = val.corrected_content or question_answer
+                            except Exception as val_err:
+                                logger.warning(
+                                    "Validator failed for question answer, sending unvalidated: %s",
+                                    val_err,
+                                )
+
+                            if validation_ok:
+                                await send_email(
+                                    to=buyer_obj.email,
+                                    subject=f"Re: {reply.get('subject', '')}",
+                                    body=send_body,
+                                    send_type="reply",
+                                )
+                                logger.info(
+                                    "Scheduler: question answer sent to buyer %s for deal %s",
+                                    buyer_id, campaign.deal_id,
+                                )
+                        except Exception as q_send_err:
                             logger.warning(
-                                "Scheduler: failed to send assignment contract for buyer %s, deal %s: %s",
-                                buyer_id, campaign.deal_id, e, exc_info=True,
+                                "Scheduler: failed to send question answer to buyer %s: %s",
+                                buyer_id, q_send_err, exc_info=True,
                             )
+
+                    # 10c. Interested intent — contract-ready alert is already created
+                    # in reply_processor.py. The scheduler does NOT send the contract
+                    # directly here; it routes through the dashboard alert for manual
+                    # preparation and review.
 
                     # 10d. Handle Unsubscribe intent: mark buyer as opted out
                     if reply_intent == "Unsubscribe" and buyer_obj:
@@ -725,6 +869,22 @@ async def process_buyer_replies() -> int:
                             },
                         )
                         db.add(log_entry_unsub)
+
+                        # Pause all queued campaigns for this buyer
+                        queued_unsub_result = await db.execute(
+                            select(Campaign).where(
+                                Campaign.buyer_id == buyer_id,
+                                Campaign.status == "Queued",
+                            )
+                        )
+                        queued_list = queued_unsub_result.scalars().all()
+                        for qc_unsub in queued_list:
+                            qc_unsub.status = "Paused"
+                            db.add(qc_unsub)
+                        logger.info(
+                            "Scheduler: paused %d queued campaigns for unsubscribed buyer %s",
+                            len(queued_list), buyer_id,
+                        )
 
                     processed_count += 1
 
@@ -827,6 +987,11 @@ async def detect_and_flag_ghosts() -> int:
                     deal = await db.get(Deal, deal_id)
                     if not deal or deal.status not in ("Available", "Campaign Launched"):
                         continue
+
+                    # Check buyer hasn't unsubscribed
+                    buyer_check = await db.get(Buyer, buyer_id)
+                    if not buyer_check or buyer_check.unsubscribed_at:
+                        continue  # Do not ghost-detect unsubscribed buyers
 
                     # Check the buyer hasn't passed or unsubscribed on this deal
                     terminal_statuses = await db.execute(

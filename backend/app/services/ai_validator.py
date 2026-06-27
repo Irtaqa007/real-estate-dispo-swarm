@@ -162,6 +162,10 @@ def _check_floor_price(
     for amount_str in amounts:
         # Strip $ and commas, parse float
         amount_val = float(amount_str.replace("$", "").replace(",", ""))
+        # Skip amounts too small to be a deal price
+        # (below 10% of floor = clearly not a property price)
+        if amount_val < floor_val * 0.10:
+            continue
         if amount_val < floor_val:
             return (
                 f"Price ${amount_val:,.2f} quoted below floor price "
