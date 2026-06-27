@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
 
 # Stage 2: Runtime
@@ -45,7 +44,12 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # and the model is baked into the image (no download on first run).
 # Pass --build-arg HF_TOKEN=xxx when building to authenticate with the HF Hub.
 ARG HF_TOKEN=
-ENV SENTENCE_TRANSFORMERS_HOME=/app/models
+# Store the model in /tmp/hf_models — outside the /app volume mount.
+# Using /app/models causes the model to download into the repo's
+# backend/models/ directory on the host via the volume mount, which
+# then gets accidentally committed to git. /tmp is never mounted.
+ENV SENTENCE_TRANSFORMERS_HOME=/tmp/hf_models \
+    HF_HOME=/tmp/hf_models
 RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer('mixedbread-ai/mxbai-embed-large-v1', token=os.environ.get('HF_TOKEN') or None)"
 
 COPY . .
