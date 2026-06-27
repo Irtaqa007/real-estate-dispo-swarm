@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 class Settings(BaseSettings):
     # App
     app_name: str = "RealEstateDispoSwarm"
-    debug: bool = True
+    debug: bool = False
     version: str = "1.0.0"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     # Groq
     groq_api_key: Optional[str] = None
     groq_model: str = "llama-3.3-70b-versatile"
+    groq_fallback_model: str = "llama-3.1-8b-instant"
 
     # Gmail
     gmail_address: Optional[str] = None
@@ -77,9 +78,9 @@ class Settings(BaseSettings):
     gmail_timezone: str = "Asia/Karachi"
 
     # Operator Identity — the AI speaks as this person in all communications.
-    operator_name: str = "Alex"
-    operator_first_name: str = "Alex"
-    operator_email_signature: str = "Best,\nAlex"
+    operator_name: str = ""
+    operator_first_name: str = ""
+    operator_email_signature: str = ""
     operator_tone: str = "conversational"
     operator_never_say: str = ""
     operator_context: str = ""
@@ -96,6 +97,17 @@ class Settings(BaseSettings):
 
     # How often the auto-match job runs, in hours.
     auto_match_interval_hours: int = 6
+
+    # Scheduler task intervals (in minutes)
+    reply_check_interval_minutes: int = 5
+    hourly_check_interval_minutes: int = 60
+
+    # IMPORTANT: Review market_adjuster.py and jv_rotator.py
+    # logic and thresholds before enabling. These services
+    # make autonomous suggestions that affect deal pricing
+    # and JV partner selection. Disabled by default.
+    market_adjuster_enabled: bool = False
+    jv_rotator_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 

@@ -129,7 +129,7 @@ async def test_missing_sign_off_warns_and_auto_corrects():
 @pytest.mark.asyncio
 async def test_sign_off_present_passes():
     """Content with operator name should pass the sign-off check."""
-    first_name = settings.operator_first_name or settings.operator_name.split()[0]
+    first_name = settings.operator_first_name or (settings.operator_name.split()[0] if settings.operator_name else "Alex")
     result = await validate_ai_output(
         content=f"Hi {first_name}, this property at 123 Test St is ready.",
         content_type="campaign_email",
@@ -358,7 +358,7 @@ async def test_hallucination_guard_no_deal_skips(mock_groq):
 @pytest.mark.asyncio
 async def test_valid_email_passes():
     """A clean, valid email should result in severity=pass."""
-    first_name = settings.operator_first_name or settings.operator_name.split()[0]
+    first_name = settings.operator_first_name or (settings.operator_name.split()[0] if settings.operator_name else "Alex")
     result = await validate_ai_output(
         content=(
             f"Hi Investor, this 3-bedroom property at 123 Test St in "

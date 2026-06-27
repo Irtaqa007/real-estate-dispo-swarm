@@ -12,7 +12,7 @@ Tables:
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, Column, Computed, DateTime, Float, ForeignKey, Integer, Numeric, Text, func
+from sqlalchemy import Boolean, Column, Computed, DateTime, Float, ForeignKey, Index, Integer, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -203,12 +203,12 @@ class Campaign(Base):
     __tablename__ = "campaigns"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=False)
-    buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id"), nullable=False)
+    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=False, index=True)
+    buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id"), nullable=False, index=True)
     touch_number = Column(Integer, nullable=False)  # 1 to 6
-    status = Column(Text, default="Queued")  # Queued, Sent, Opened, Replied, Bounced, Failed, Contract_Pending
-    sent_at = Column(DateTime(timezone=True), nullable=True)
-    scheduled_send_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(Text, default="Queued", index=True)  # Queued, Sent, Opened, Replied, Bounced, Failed, Contract_Pending
+    sent_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    scheduled_send_at = Column(DateTime(timezone=True), nullable=True, index=True)
     subject = Column(Text, nullable=True)
     body = Column(Text, nullable=True)
     reply_received_at = Column(DateTime(timezone=True), nullable=True)
@@ -219,7 +219,7 @@ class Campaign(Base):
     ai_extracted_insights = Column(Text, nullable=True)
     buyer_profile_updated = Column(Boolean, default=False)
     question_round = Column(Integer, default=0)
-    ghost_detected_at = Column(DateTime(timezone=True), nullable=True)
+    ghost_detected_at = Column(DateTime(timezone=True), nullable=True, index=True)
     ghost_recovery_touch = Column(Integer, default=0)
     ghost_recovery_sent_at = Column(DateTime(timezone=True), nullable=True)
     pass_reason_category = Column(Text, nullable=True)  # price_too_high, wrong_market, condition, etc.
@@ -227,6 +227,11 @@ class Campaign(Base):
     pass_reason_confidence = Column(Text, nullable=True)  # high, medium, low
     passed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_campaigns_status_scheduled', 'status', 'scheduled_send_at'),
+        Index('ix_campaigns_buyer_deal', 'buyer_id', 'deal_id'),
+    )
 
     # Relationships
     deal = relationship("Deal", back_populates="campaigns")
@@ -262,6 +267,8 @@ class ActivityLog(Base):
     entity_id = Column(UUID(as_uuid=True), nullable=True)
     action = Column(Text, nullable=True)
     metadata_json = Column("metadata", JSONB, nullable=True)
+    resolved = Column(Boolean, default=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     def __repr__(self) -> str:
@@ -326,7 +333,7 @@ class BuyerReengagementSchedule(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     buyer_id = Column(UUID(as_uuid=True), ForeignKey("buyers.id"), nullable=False, index=True)
-    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=True)
+    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=True, index=True)
     stated_window_raw = Column(Text, nullable=False)
     target_date = Column(DateTime(timezone=True), nullable=False, index=True)
     context_summary = Column(Text, nullable=True)

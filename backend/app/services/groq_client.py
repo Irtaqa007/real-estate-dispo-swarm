@@ -225,7 +225,11 @@ async def groq_chat_completion(
     temperature: float = 0.7,
     max_tokens: int = 300,
 ) -> Any:
-    """Make a rate-limited chat completion call to Groq.
+    """Make a rate-limited chat completion call to Groq with fallback support.
+
+    Attempts the primary model first. On non-rate-limit errors, retries
+    with the configured fallback model (llama-3.1-8b-instant by default).
+    If the fallback also fails, raises the original exception.
 
     Args:
         messages: Chat messages for the Groq API.
@@ -239,18 +243,41 @@ async def groq_chat_completion(
     Raises:
         ValueError: If GROQ_API_KEY is not set.
         RuntimeError: If daily rate limit is exceeded.
-        groq.APIError: If the API returns an error.
+        groq.APIError: If all models fail.
     """
     client = await get_groq_client()
-    model = model or settings.groq_model
+    primary_model = model or settings.groq_model
+    fallback_model = settings.groq_fallback_model
 
-    return await rate_limited_groq_call(
-        client.chat.completions.create,
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    try:
+        return await rate_limited_groq_call(
+            client.chat.completions.create,
+            model=primary_model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as e:
+        # On rate-limit errors, don't fallback — let the rate limiter handle it
+        if "rate_limit" in str(e).lower() or "rate limit" in str(e).lower():
+            raise
+
+        logger.warning(
+            "Primary Groq model %s failed (%s), retrying with fallback model %s",
+            primary_model, type(e).__name__, fallback_model,
+        )
+
+        try:
+            return await rate_limited_groq_call(
+                client.chat.completions.create,
+                model=fallback_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception:
+            # Fallback also failed — raise the original exception
+            raise e
 
 
 # ---------------------------------------------------------------------------

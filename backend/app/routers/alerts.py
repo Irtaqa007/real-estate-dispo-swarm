@@ -37,6 +37,7 @@ async def get_contract_alerts(
         select(ActivityLog)
         .where(
             ActivityLog.action == "contract_ready",
+            ActivityLog.resolved == False,
         )
         .order_by(desc(ActivityLog.created_at))
         .limit(50)
@@ -47,7 +48,6 @@ async def get_contract_alerts(
     items: List[Dict[str, Any]] = []
     for entry in entries:
         meta = entry.metadata_json or {}
-        resolved = meta.get("resolved", False)
         buyer = meta.get("buyer", {})
         deal = meta.get("deal", {})
 
@@ -61,7 +61,7 @@ async def get_contract_alerts(
             "negotiated_price": meta.get("negotiated_price"),
             "my_payout": deal.get("my_payout"),
             "jv_partner_name": deal.get("jv_partner"),
-            "resolved": resolved,
+            "resolved": entry.resolved,
             "resolved_at": meta.get("resolved_at"),
             "full_metadata": meta,
         })
@@ -94,8 +94,9 @@ async def resolve_contract_alert(
         )
 
     now = datetime.now(timezone.utc)
+    entry.resolved = True
+    entry.resolved_at = now
     meta = entry.metadata_json or {}
-    meta["resolved"] = True
     meta["resolved_at"] = now.isoformat()
     if body and body.notes:
         meta["resolution_notes"] = body.notes

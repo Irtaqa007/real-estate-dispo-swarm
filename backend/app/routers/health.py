@@ -22,10 +22,10 @@ from app.database import engine, get_db
 from app.models.schemas import Campaign, FailedCampaign
 from app.services.circuit_breaker import gmail_circuit_breaker
 from app.services.embeddings import check_cohere_health
-from app.services.groq_client import get_rate_limit_status
+from app.services.groq_client import get_rate_limit_status, groq_chat_completion
 from app.services.resilience import get_resilience_health
 from app.services.scheduler import is_scheduler_running
-from app.services.state_persistence import get_gmail_send_status
+from app.services.state_persistence import get_gmail_send_status, get_scheduler_heartbeat
 
 router = APIRouter(tags=["health"])
 
@@ -131,13 +131,56 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         cohere_detail["error"] = cohere_result["error"]
 
     # ------------------------------------------------------------------
+    # Groq connectivity check — minimal test call with fallback model
+    # ------------------------------------------------------------------
+    async def _check_groq_health() -> dict:
+        try:
+            result = await groq_chat_completion(
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=5,
+                model=settings.groq_fallback_model,
+            )
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "detail": str(e)[:100]}
+
+    groq_health = await _check_groq_health()
+
+    # ------------------------------------------------------------------
+    # Scheduler heartbeat check
+    # ------------------------------------------------------------------
+    async def _check_scheduler_heartbeat() -> dict:
+        try:
+            heartbeat = await get_scheduler_heartbeat()
+            if heartbeat is None:
+                return {"status": "stale", "detail": "No heartbeat recorded yet"}
+            last_tick = heartbeat.get("last_tick", "")
+            tick_count = heartbeat.get("tick_count", 0)
+            if last_tick:
+                last_tick_dt = datetime.fromisoformat(last_tick)
+                hours_since = (now - last_tick_dt).total_seconds() / 3600
+                if hours_since > 2:
+                    return {
+                        "status": "stale",
+                        "last_tick": last_tick,
+                        "tick_count": tick_count,
+                        "detail": f"Last tick was {hours_since:.1f} hours ago",
+                    }
+                return {"status": "ok", "last_tick": last_tick, "tick_count": tick_count}
+            return {"status": "stale", "detail": "Heartbeat has no timestamp"}
+        except Exception as e:
+            return {"status": "error", "detail": str(e)[:100]}
+
+    scheduler_heartbeat = await _check_scheduler_heartbeat()
+
+    # ------------------------------------------------------------------
     # Resilience subsystem
     # ------------------------------------------------------------------
     resilience = await get_resilience_health()
 
     # ------------------------------------------------------------------
     # Determine overall status
-    # Uses only critical services (DB, Gmail circuit breaker).
+    # Uses only critical services (DB, Gmail circuit breaker, Groq).
     # Cohere is optional — DNS flakiness in Docker should not degrade the
     # health check result.
     # ------------------------------------------------------------------
@@ -145,6 +188,10 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     if db_status != "connected":
         status = "degraded"
     if cb_state["state"] == "open":
+        status = "degraded"
+    if groq_health.get("status") == "error":
+        status = "degraded"
+    if scheduler_heartbeat.get("status") == "stale":
         status = "degraded"
 
     return {
@@ -157,9 +204,11 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         "gmail_detail": gmail_detail,
         "groq": groq_status,
         "groq_detail": groq_detail,
+        "groq_health": groq_health,
         "cohere": cohere_status,
         "cohere_detail": cohere_detail,
         "scheduler": "running" if scheduler_running else "stopped",
+        "scheduler_heartbeat": scheduler_heartbeat,
         "pending_campaigns": pending_count,
         "failed_campaigns": failed_count,
         "resilience": {

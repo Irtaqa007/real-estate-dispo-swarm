@@ -202,7 +202,7 @@ async def test_resolve_contract_alert():
 
     assert result["resolved"] is True
     assert "resolved_at" in result
-    assert mock_entry.metadata_json["resolved"] is True
+    assert mock_entry.resolved is True
     assert mock_entry.metadata_json["resolved_at"] is not None
     assert mock_entry.metadata_json["resolution_notes"] == "Sent via DocuSign at 3pm"
     mock_db.add.assert_called_once_with(mock_entry)
@@ -247,10 +247,11 @@ async def test_get_contract_alerts_returns_unresolved():
     mock_entry_1.id = alert_id_1
     mock_entry_1.action = "contract_ready"
     mock_entry_1.created_at = now
+    mock_entry_1.resolved = False
+    mock_entry_1.resolved_at = None
     mock_entry_1.metadata_json = {
         "alert_type": "contract_ready",
         "alert_user": True,
-        "resolved": False,
         "buyer": {"name": "Buyer One", "email": "buyer1@test.com"},
         "deal": {"address": "123 Main St", "state": "TX", "my_payout": 20000},
         "negotiated_price": 180000,
@@ -260,10 +261,11 @@ async def test_get_contract_alerts_returns_unresolved():
     mock_entry_2.id = alert_id_2
     mock_entry_2.action = "contract_ready"
     mock_entry_2.created_at = now
+    mock_entry_2.resolved = True
+    mock_entry_2.resolved_at = now
     mock_entry_2.metadata_json = {
         "alert_type": "contract_ready",
         "alert_user": True,
-        "resolved": True,
         "resolved_at": now.isoformat(),
         "buyer": {"name": "Buyer Two", "email": "buyer2@test.com"},
         "deal": {"address": "456 Oak Ave", "state": "CA", "my_payout": 15000},
@@ -283,4 +285,4 @@ async def test_get_contract_alerts_returns_unresolved():
     assert alerts[0]["resolved"] is False
     assert alerts[1]["resolved"] is True
     assert alerts[0]["full_metadata"] is not None
-    assert alerts[1]["full_metadata"]["resolved"] is True
+    assert alerts[1]["resolved"] is True

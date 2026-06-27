@@ -42,6 +42,7 @@ from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
 from app.services.jv_rotator import check_jv_rotation
 from app.services.market_adjuster import check_touch_3_adjustment, check_touch_4_adjustment
+from app.services.parse_buy_box import parse_buy_box
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +242,6 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
 
                     # Re-parse structured fields from merged buy_box
                     try:
-                        from app.services.parse_buy_box import parse_buy_box
                         parsed = await parse_buy_box(merged_buy_box)
                         buyer_obj.price_min = parsed.get("price_min")
                         buyer_obj.price_max = parsed.get("price_max")
@@ -700,7 +700,7 @@ async def launch_campaign(
     # 3a. Predictive JV Flagging: check JV partner reliability before launch
     jv_warning = None
     jv_partner = None
-    if deal.jv_partner_id:
+    if deal.jv_partner_id and settings.jv_rotator_enabled:
         jv_result = await db.execute(
             select(JVPartner).where(JVPartner.id == deal.jv_partner_id)
         )

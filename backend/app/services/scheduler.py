@@ -1,16 +1,17 @@
 """Background task scheduler for automated 24/7 operations.
 
-Runs every hour as an asyncio background task, performing:
-1. Process scheduled campaign sends
-2. Check for buyer replies in Gmail
-3. Monitor title company emails
+Maintains two independent intervals:
+- Reply interval (5 min): time-sensitive tasks (reply processing, ghost detection, campaign sends)
+- Hourly interval (60 min): daily/maintenance tasks (auto-match, insights, aging, etc.)
 
-Each task is individually wrapped in try/except so one failure
-never crashes the entire scheduler.
+The loop ticks every 60 seconds and dispatches tasks based on elapsed time
+since each interval's last run. Each task is individually wrapped in
+try/except so one failure never crashes the entire scheduler.
 """
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -35,6 +36,7 @@ from app.services.state_persistence import (
     save_all_state,
     load_gmail_daily_sends,
     save_gmail_daily_sends,
+    save_scheduler_heartbeat,
 )
 from app.services.ghost_recovery import generate_ghost_recovery_email
 from app.services.ai_validator import ValidationResult, validate_ai_output
@@ -46,11 +48,14 @@ from app.services.resilience import get_metrics, get_idempotency_store
 from app.services.groq_client import get_call_count_today, get_calls_today_date
 from app.services.buyer_merge import merge_buy_boxes
 from app.models.schemas import BuyerEmail
+from app.services.parse_buy_box import parse_buy_box
 
 logger = logging.getLogger(__name__)
 
-# Interval between scheduler runs (in seconds)
-SCHEDULER_INTERVAL_SECONDS = 60 * 60  # 1 hour
+# Scheduler intervals
+REPLY_INTERVAL_SECONDS = 5 * 60       # 5 minutes: time-sensitive tasks
+DAILY_INTERVAL_SECONDS = 60 * 60      # 1 hour: daily/maintenance tasks
+TICK_INTERVAL_SECONDS = 60            # Outer loop sleep (1 minute tick)
 
 # ---------------------------------------------------------------------------
 # Core scheduling logic
@@ -461,7 +466,6 @@ async def process_buyer_replies() -> int:
 
                                 # Re-parse structured fields from merged buy_box
                                 try:
-                                    from app.services.parse_buy_box import parse_buy_box
                                     parsed = await parse_buy_box(merged_buy_box)
                                     buyer_obj.price_min = parsed.get("price_min")
                                     buyer_obj.price_max = parsed.get("price_max")
@@ -1407,29 +1411,36 @@ _running = False
 
 
 async def _scheduler_loop() -> None:
-    """Run the scheduler loop every SCHEDULER_INTERVAL_SECONDS.
+    """Run the scheduler loop with two independent intervals.
 
-    Each task is wrapped individually so one failure doesn't crash the loop.
-    Tasks:
-    - process_scheduled_campaigns: Send queued campaigns past their schedule
-    - check_replies: Check Gmail inbox for buyer replies
-    - monitor_title_emails: Check Gmail inbox for title company emails
-    - run_tier_promotions: Daily auto-tier promotion for buyers
-    - reset_pitch_counters: Weekly fatigue counter reset
+    Reply interval (5 min): process_buyer_replies, detect_and_flag_ghosts,
+                            process_scheduled_campaigns
+    Hourly interval (60 min): all other tasks (auto-match, insights, aging,
+                              reengagement, ghost recovery, midnight reset,
+                              queued matches, state persistence, DLQ retry)
+
+    On each 60-second tick, checks which interval is due and runs the
+    corresponding task group. Writes a heartbeat every tick.
     """
     global _running
     _running = True
 
-    logger.info("Scheduler: background task started (interval=%ds)", SCHEDULER_INTERVAL_SECONDS)
+    logger.info(
+        "Scheduler: background task started "
+        "(reply_interval=%ds, hourly_interval=%ds, tick=%ds)",
+        REPLY_INTERVAL_SECONDS,
+        DAILY_INTERVAL_SECONDS,
+        TICK_INTERVAL_SECONDS,
+    )
 
-    # Track when daily tasks last ran to avoid running them every hour
+    # Track when each task group last ran
+    _last_reply_run = 0.0
+    _last_hourly_run = 0.0
     _last_daily_run_date = None
-    # FEATURE 5: Track last auto-match run for periodic scheduling
     _last_auto_match_time = datetime.min.replace(tzinfo=timezone.utc)
+    _tick_count = 0
 
-    # ── FEATURE 5: Run auto-match once on startup ──
-    # Matches all active deals against eligible buyers immediately so that
-    # deals entered while the scheduler was stopped don't wait 6 hours.
+    # ── Run auto-match once on startup ──
     try:
         if settings.auto_match_enabled:
             result = await match_all_active_deals()
@@ -1446,215 +1457,44 @@ async def _scheduler_loop() -> None:
 
     try:
         while _running:
+            _tick_count += 1
+            now = time.monotonic()
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             is_new_day = (_last_daily_run_date != today)
 
-            # ---- Task 1: Process scheduled campaigns ----
+            # ── Write scheduler heartbeat (never blocks the loop) ──
             try:
-                sent = await process_scheduled_campaigns()
-                if sent > 0:
-                    logger.info("Scheduler: sent %d campaigns", sent)
-            except Exception as e:
-                logger.error("Scheduler: campaign processing failed: %s", e, exc_info=True)
+                await save_scheduler_heartbeat(_tick_count)
+            except Exception:
+                pass
 
-            if not _running:
-                break
-
-            # ---- Task 2: Check for buyer replies ----
-            try:
-                processed = await process_buyer_replies()
-                if processed > 0:
-                    logger.info("Scheduler: processed %d buyer replies", processed)
-            except Exception as e:
-                logger.error("Scheduler: reply processing failed: %s", e, exc_info=True)
-
-            if not _running:
-                break
-
-            # ---- Task 2b: Process queued deal matches ----
-            try:
-                async with _db.async_session_factory() as db:
-                    released = await process_queued_matches(db)
-                    if released > 0:
-                        logger.info("Scheduler: released %d queued deal matches", released)
-            except Exception as e:
-                logger.error("Scheduler: queued match processing failed: %s", e, exc_info=True)
-
-            if not _running:
-                break
-
-            # ---- Task 3: Monitor title company emails ----
-            try:
-                result = await process_title_emails()
-                if result.get("total_found", 0) > 0:
-                    logger.info(
-                        "Scheduler: processed %d title emails (%d actions)",
-                        result["total_found"], result["processed"],
-                    )
-            except Exception as e:
-                logger.error("Scheduler: title email monitoring failed: %s", e, exc_info=True)
-
-            if not _running:
-                break
-
-            # ---- Task 4: Daily tier promotions ----
-            if is_new_day:
+            # ====================================================================
+            # REPLY INTERVAL — runs every 5 minutes (time-sensitive tasks)
+            # ====================================================================
+            if now - _last_reply_run >= REPLY_INTERVAL_SECONDS:
+                # --- Task R1: Process scheduled campaigns ---
                 try:
-                    async with _db.async_session_factory() as db:
-                        promotions = await run_tier_promotions(db)
-                        if promotions:
-                            logger.info(
-                                "Scheduler: %d buyers promoted via auto-tier scoring",
-                                len(promotions),
-                            )
+                    sent = await process_scheduled_campaigns()
+                    if sent > 0:
+                        logger.info("Scheduler: sent %d campaigns", sent)
                 except Exception as e:
-                    logger.error("Scheduler: tier promotions failed: %s", e, exc_info=True)
+                    logger.error("Scheduler: campaign processing failed: %s", e, exc_info=True)
 
                 if not _running:
                     break
 
-                # ---- Task 5: Weekly fatigue counter reset ----
+                # --- Task R2: Check for buyer replies ---
                 try:
-                    async with _db.async_session_factory() as db:
-                        reset_count = await reset_pitch_counters(db)
-                        if reset_count > 0:
-                            logger.info(
-                                "Scheduler: reset pitch counters for %d buyers",
-                                reset_count,
-                            )
+                    processed = await process_buyer_replies()
+                    if processed > 0:
+                        logger.info("Scheduler: processed %d buyer replies", processed)
                 except Exception as e:
-                    logger.error("Scheduler: pitch counter reset failed: %s", e, exc_info=True)
+                    logger.error("Scheduler: reply processing failed: %s", e, exc_info=True)
 
-            if not _running:
-                break
+                if not _running:
+                    break
 
-            # ── FEATURE 1: Gmail daily send counter midnight reset ──
-            # Runs on every scheduler cycle (not gated by UTC is_new_day) because
-            # the configured timezone midnight may not align with UTC midnight.
-            try:
-                from zoneinfo import ZoneInfo
-                from datetime import timedelta
-                now_tz = datetime.now(ZoneInfo(settings.gmail_timezone))
-                counter = await load_gmail_daily_sends()
-                counter_date = counter.get("date", "")
-                today_tz = now_tz.strftime("%Y-%m-%d")
-                if counter_date and counter_date != today_tz:
-                    # Date changed in configured timezone — reset counter
-                    yesterday_count = counter.get("count", 0)
-                    next_midnight = now_tz.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-                    await save_gmail_daily_sends(0, today_tz, next_midnight.isoformat())
-                    logger.info(
-                        "Gmail daily counter reset. Yesterday: %d sends.",
-                        yesterday_count,
-                    )
-            except Exception as e:
-                logger.error("Scheduler: gmail daily counter reset failed: %s", e, exc_info=True)
-
-            if not _running:
-                break
-
-            # ---- Tasks 6-9: Run independent tasks concurrently ----
-            # Aging monitor, buyer insights, state persistence, DLQ retry,
-            # auto-match, ghost detection, and ghost recovery are all
-            # independent of each other — run them in parallel to reduce
-            # total cycle time.
-            async def _task_aging() -> None:
-                if is_new_day:
-                    try:
-                        async with _db.async_session_factory() as db:
-                            aging_actions = await run_aging_monitor(db)
-                            if aging_actions:
-                                logger.info(
-                                    "Scheduler: %d aging escalation actions taken",
-                                    len(aging_actions),
-                                )
-                                for action in aging_actions:
-                                    logger.info(
-                                        "  Aging: deal %s (%d days old) → %s",
-                                        action["address"], action["days_old"], action["action"],
-                                    )
-                    except Exception as e:
-                        logger.error("Scheduler: aging monitor failed: %s", e, exc_info=True)
-
-            async def _task_insights() -> None:
-                if is_new_day and datetime.now(timezone.utc).weekday() == 0:
-                    try:
-                        async with _db.async_session_factory() as db:
-                            count = await update_all_buyer_insights(db)
-                            if count > 0:
-                                logger.info(
-                                    "Scheduler: updated portfolio insights for %d buyers",
-                                    count,
-                                )
-                    except Exception as e:
-                        logger.error("Scheduler: buyer insights update failed: %s", e, exc_info=True)
-
-            async def _task_persist() -> None:
-                try:
-                    cb_queue_items = get_cb_queue()
-                    metrics = get_metrics()
-                    idem_store = get_idempotency_store()
-                    groq_count = get_call_count_today()
-                    groq_date = get_calls_today_date() or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-                    await save_all_state(
-                        cb_queue=cb_queue_items,
-                        metrics=metrics,
-                        idempotency_store=idem_store,
-                        groq_count=groq_count,
-                        groq_date=groq_date,
-                    )
-                    logger.debug("Scheduler: persisted in-memory state to DB")
-                except Exception as e:
-                    logger.error("Scheduler: failed to persist in-memory state: %s", e, exc_info=True)
-
-            async def _task_dlq_retry() -> None:
-                """Auto-retry up to 5 failed campaigns per scheduler cycle."""
-                try:
-                    async with _db.async_session_factory() as db:
-                        result = await db.execute(
-                            select(FailedCampaign)
-                            .where(FailedCampaign.resolved == False)
-                            .order_by(FailedCampaign.last_retry_at.asc().nullsfirst())
-                            .limit(5)
-                        )
-                        failed_campaigns = result.scalars().all()
-
-                        for dlq_entry in failed_campaigns:
-                            if not _running:
-                                break
-                            retry_result = await retry_failed_campaign(db, dlq_entry)
-                            if retry_result.get("success"):
-                                logger.info("DLQ auto-retry succeeded for campaign %s", dlq_entry.campaign_id)
-                            elif "Cooldown" in retry_result.get("error", ""):
-                                break  # Remaining entries are also within cooldown
-                except Exception as e:
-                    logger.error("Scheduler: DLQ auto-retry failed: %s", e, exc_info=True)
-
-            # ── FEATURE 5: Periodic auto-match ──
-            async def _task_auto_match() -> None:
-                hours_since = (
-                    datetime.now(timezone.utc) - _last_auto_match_time
-                ).total_seconds() / 3600
-                if (
-                    settings.auto_match_enabled
-                    and hours_since >= settings.auto_match_interval_hours
-                ):
-                    try:
-                        result = await match_all_active_deals()
-                        if result["deals_processed"] > 0:
-                            logger.info(
-                                "Periodic auto-match: %d deals, %d campaigns, %d queued",
-                                result["deals_processed"],
-                                result["campaigns_launched"],
-                                result["buyers_queued"],
-                            )
-                        _last_auto_match_time = datetime.now(timezone.utc)
-                    except Exception as e:
-                        logger.error("Periodic auto-match failed: %s", e, exc_info=True)
-
-            # ── Ghost detection ──
-            async def _task_ghost_detection() -> None:
+                # --- Task R3: Ghost detection (time-sensitive) ---
                 try:
                     ghosts = await detect_and_flag_ghosts()
                     if ghosts > 0:
@@ -1662,42 +1502,216 @@ async def _scheduler_loop() -> None:
                 except Exception as e:
                     logger.error("Scheduler: ghost detection failed: %s", e, exc_info=True)
 
-            # ── Ghost recovery emails ──
-            async def _task_ghost_recovery() -> None:
-                try:
-                    sent = await send_ghost_recovery_emails()
-                    if sent > 0:
-                        logger.info("Scheduler: sent %d ghost recovery email(s)", sent)
-                except Exception as e:
-                    logger.error("Scheduler: ghost recovery send failed: %s", e, exc_info=True)
+                _last_reply_run = now
 
-            # ── Re-engagement scheduler (daily) ──
-            async def _task_reengagement() -> None:
-                try:
-                    fired = await fire_buyer_reengagements()
-                    if fired > 0:
-                        logger.info("Scheduler: fired %d buyer re-engagement(s)", fired)
-                except Exception as e:
-                    logger.error("Scheduler: buyer re-engagement failed: %s", e, exc_info=True)
+            if not _running:
+                break
 
-            await asyncio.gather(
-                _task_aging(),
-                _task_insights(),
-                _task_persist(),
-                _task_dlq_retry(),
-                _task_auto_match(),
-                _task_ghost_detection(),
-                _task_ghost_recovery(),
-                _task_reengagement(),
-                return_exceptions=True,
-            )
+            # ====================================================================
+            # HOURLY INTERVAL — runs every 60 minutes (maintenance tasks)
+            # ====================================================================
+            if now - _last_hourly_run >= DAILY_INTERVAL_SECONDS:
+                # --- Task H1: Process queued deal matches ---
+                try:
+                    async with _db.async_session_factory() as db:
+                        released = await process_queued_matches(db)
+                        if released > 0:
+                            logger.info("Scheduler: released %d queued deal matches", released)
+                except Exception as e:
+                    logger.error("Scheduler: queued match processing failed: %s", e, exc_info=True)
+
+                if not _running:
+                    break
+
+                # --- Task H2: Monitor title company emails ---
+                try:
+                    result = await process_title_emails()
+                    if result.get("total_found", 0) > 0:
+                        logger.info(
+                            "Scheduler: processed %d title emails (%d actions)",
+                            result["total_found"], result["processed"],
+                        )
+                except Exception as e:
+                    logger.error("Scheduler: title email monitoring failed: %s", e, exc_info=True)
+
+                if not _running:
+                    break
+
+                # --- Task H3: Daily tier promotions (new day only) ---
+                if is_new_day:
+                    try:
+                        async with _db.async_session_factory() as db:
+                            promotions = await run_tier_promotions(db)
+                            if promotions:
+                                logger.info(
+                                    "Scheduler: %d buyers promoted via auto-tier scoring",
+                                    len(promotions),
+                                )
+                    except Exception as e:
+                        logger.error("Scheduler: tier promotions failed: %s", e, exc_info=True)
+
+                    if not _running:
+                        break
+
+                    # --- Task H4: Weekly fatigue counter reset ---
+                    try:
+                        async with _db.async_session_factory() as db:
+                            reset_count = await reset_pitch_counters(db)
+                            if reset_count > 0:
+                                logger.info(
+                                    "Scheduler: reset pitch counters for %d buyers",
+                                    reset_count,
+                                )
+                    except Exception as e:
+                        logger.error("Scheduler: pitch counter reset failed: %s", e, exc_info=True)
+
+                if not _running:
+                    break
+
+                # ── Gmail daily send counter midnight reset ──
+                try:
+                    from zoneinfo import ZoneInfo
+                    now_tz = datetime.now(ZoneInfo(settings.gmail_timezone))
+                    counter = await load_gmail_daily_sends()
+                    counter_date = counter.get("date", "")
+                    today_tz = now_tz.strftime("%Y-%m-%d")
+                    if counter_date and counter_date != today_tz:
+                        yesterday_count = counter.get("count", 0)
+                        next_midnight = now_tz.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                        await save_gmail_daily_sends(0, today_tz, next_midnight.isoformat())
+                        logger.info(
+                            "Gmail daily counter reset. Yesterday: %d sends.",
+                            yesterday_count,
+                        )
+                except Exception as e:
+                    logger.error("Scheduler: gmail daily counter reset failed: %s", e, exc_info=True)
+
+                if not _running:
+                    break
+
+                # --- Run independent hourly tasks concurrently ---
+                async def _task_aging() -> None:
+                    if is_new_day:
+                        try:
+                            async with _db.async_session_factory() as db:
+                                aging_actions = await run_aging_monitor(db)
+                                if aging_actions:
+                                    logger.info(
+                                        "Scheduler: %d aging escalation actions taken",
+                                        len(aging_actions),
+                                    )
+                        except Exception as e:
+                            logger.error("Scheduler: aging monitor failed: %s", e, exc_info=True)
+
+                async def _task_insights() -> None:
+                    if is_new_day and datetime.now(timezone.utc).weekday() == 0:
+                        try:
+                            async with _db.async_session_factory() as db:
+                                count = await update_all_buyer_insights(db)
+                                if count > 0:
+                                    logger.info(
+                                        "Scheduler: updated portfolio insights for %d buyers",
+                                        count,
+                                    )
+                        except Exception as e:
+                            logger.error("Scheduler: buyer insights update failed: %s", e, exc_info=True)
+
+                async def _task_persist() -> None:
+                    try:
+                        cb_queue_items = get_cb_queue()
+                        metrics = get_metrics()
+                        idem_store = get_idempotency_store()
+                        groq_count = get_call_count_today()
+                        groq_date = get_calls_today_date() or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        await save_all_state(
+                            cb_queue=cb_queue_items,
+                            metrics=metrics,
+                            idempotency_store=idem_store,
+                            groq_count=groq_count,
+                            groq_date=groq_date,
+                        )
+                        logger.debug("Scheduler: persisted in-memory state to DB")
+                    except Exception as e:
+                        logger.error("Scheduler: failed to persist in-memory state: %s", e, exc_info=True)
+
+                async def _task_dlq_retry() -> None:
+                    try:
+                        async with _db.async_session_factory() as db:
+                            result = await db.execute(
+                                select(FailedCampaign)
+                                .where(FailedCampaign.resolved == False)
+                                .order_by(FailedCampaign.last_retry_at.asc().nullsfirst())
+                                .limit(5)
+                            )
+                            failed_campaigns = result.scalars().all()
+                            for dlq_entry in failed_campaigns:
+                                if not _running:
+                                    break
+                                retry_result = await retry_failed_campaign(db, dlq_entry)
+                                if retry_result.get("success"):
+                                    logger.info("DLQ auto-retry succeeded for campaign %s", dlq_entry.campaign_id)
+                                elif "Cooldown" in retry_result.get("error", ""):
+                                    break
+                    except Exception as e:
+                        logger.error("Scheduler: DLQ auto-retry failed: %s", e, exc_info=True)
+
+                async def _task_auto_match() -> None:
+                    hours_since = (
+                        datetime.now(timezone.utc) - _last_auto_match_time
+                    ).total_seconds() / 3600
+                    if (
+                        settings.auto_match_enabled
+                        and hours_since >= settings.auto_match_interval_hours
+                    ):
+                        try:
+                            result = await match_all_active_deals()
+                            if result["deals_processed"] > 0:
+                                logger.info(
+                                    "Periodic auto-match: %d deals, %d campaigns, %d queued",
+                                    result["deals_processed"],
+                                    result["campaigns_launched"],
+                                    result["buyers_queued"],
+                                )
+                            _last_auto_match_time = datetime.now(timezone.utc)
+                        except Exception as e:
+                            logger.error("Periodic auto-match failed: %s", e, exc_info=True)
+
+                async def _task_ghost_recovery() -> None:
+                    try:
+                        sent = await send_ghost_recovery_emails()
+                        if sent > 0:
+                            logger.info("Scheduler: sent %d ghost recovery email(s)", sent)
+                    except Exception as e:
+                        logger.error("Scheduler: ghost recovery send failed: %s", e, exc_info=True)
+
+                async def _task_reengagement() -> None:
+                    try:
+                        fired = await fire_buyer_reengagements()
+                        if fired > 0:
+                            logger.info("Scheduler: fired %d buyer re-engagement(s)", fired)
+                    except Exception as e:
+                        logger.error("Scheduler: buyer re-engagement failed: %s", e, exc_info=True)
+
+                await asyncio.gather(
+                    _task_aging(),
+                    _task_insights(),
+                    _task_persist(),
+                    _task_dlq_retry(),
+                    _task_auto_match(),
+                    _task_ghost_recovery(),
+                    _task_reengagement(),
+                    return_exceptions=True,
+                )
+
+                _last_hourly_run = now
 
             _last_daily_run_date = today
 
             if not _running:
                 break
 
-            await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
+            # Sleep 60 seconds between ticks
+            await asyncio.sleep(TICK_INTERVAL_SECONDS)
     except asyncio.CancelledError:
         logger.info("Scheduler: background task cancelled")
         _running = False

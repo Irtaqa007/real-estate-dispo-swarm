@@ -79,6 +79,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to pre-load embedding model: %s", e, exc_info=True)
 
+    # Validate required operator identity fields
+    if not settings.operator_name or not settings.operator_email_signature:
+        logger.critical(
+            "OPERATOR_NAME and OPERATOR_EMAIL_SIGNATURE must be "
+            "set in .env before starting. Every email will be "
+            "signed with these values. Refusing to start without them."
+        )
+        raise RuntimeError(
+            "Missing required operator identity configuration. "
+            "Set OPERATOR_NAME and OPERATOR_EMAIL_SIGNATURE in .env"
+        )
+
     # Start background campaign scheduler (runs every hour)
     start_scheduler()
     yield

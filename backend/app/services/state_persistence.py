@@ -39,6 +39,7 @@ KEY_IDEMPOTENCY_STORE = "idempotency_store"
 KEY_GROQ_DAILY_COUNTER = "groq_daily_counter"
 KEY_GMAIL_DAILY_SENDS = "gmail_daily_sends"
 KEY_GMAIL_CAP_WARNING_SENT = "gmail_cap_warning_sent"
+KEY_SCHEDULER_HEARTBEAT = "scheduler_heartbeat"
 
 # ---------------------------------------------------------------------------
 # Generic helpers — single-key ops still open their own session
@@ -324,6 +325,40 @@ async def increment_gmail_send_count() -> int:
 
     await save_gmail_daily_sends(new_count, today_str, reset_at_str)
     return new_count
+
+
+# ---------------------------------------------------------------------------
+# Scheduler heartbeat
+# ---------------------------------------------------------------------------
+
+
+async def save_scheduler_heartbeat(tick_count: int) -> None:
+    """Save the scheduler heartbeat timestamp to app_state.
+
+    Args:
+        tick_count: The current tick number (increments each loop).
+    """
+    from datetime import datetime, timezone
+    await _set_state(KEY_SCHEDULER_HEARTBEAT, {
+        "last_tick": datetime.now(timezone.utc).isoformat(),
+        "tick_count": tick_count,
+    })
+
+
+async def get_scheduler_heartbeat() -> Optional[Dict[str, Any]]:
+    """Load the scheduler heartbeat from app_state.
+
+    Returns:
+        Dict with keys: last_tick (ISO timestamp), tick_count (int),
+        or None if no heartbeat has been saved.
+    """
+    raw = await _get_state(KEY_SCHEDULER_HEARTBEAT)
+    if not raw or not isinstance(raw, dict):
+        return None
+    return {
+        "last_tick": str(raw.get("last_tick", "")),
+        "tick_count": int(raw.get("tick_count", 0)),
+    }
 
 
 async def get_gmail_send_status() -> Dict[str, Any]:

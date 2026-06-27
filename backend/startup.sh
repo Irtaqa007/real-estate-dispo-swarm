@@ -145,5 +145,15 @@ echo "  Starting application..."
 echo "=========================================="
 echo ""
 
+# ── Run database migrations before starting ──
+echo "Running database migrations..."
+alembic upgrade head
+if [ $? -ne 0 ]; then
+    echo "ERROR: Database migration failed. Exiting."
+    exit 1
+fi
+echo "Migrations complete."
+echo ""
+
 # Execute the main command (e.g. uvicorn)
 exec "$@"

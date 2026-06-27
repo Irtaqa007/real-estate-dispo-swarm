@@ -46,6 +46,9 @@ def mock_all_tasks():
         patch.object(scheduler, "get_idempotency_store", return_value={}),
         patch.object(scheduler, "get_call_count_today", return_value=0),
         patch.object(scheduler, "get_calls_today_date", return_value="2026-06-13"),
+        # New scheduler dependencies
+        patch.object(scheduler, "match_all_active_deals", AsyncMock(return_value={"deals_processed": 0, "campaigns_launched": 0, "buyers_queued": 0})),
+        patch.object(scheduler, "save_scheduler_heartbeat", AsyncMock()),
     ]
     for p in patches:
         p.start()
@@ -81,19 +84,31 @@ async def test_loop_breaks_when_running_false_after_task1(mock_all_tasks):
     """Setting _running=False should cause a break after the current task finishes."""
     scheduler._running = True
 
-    # Run scheduler loop briefly, then set _running = False
-    async def run_and_stop():
-        loop_task = asyncio.create_task(scheduler._scheduler_loop())
-        await asyncio.sleep(0.01)  # Let it start Task 1
-        scheduler._running = False  # Request shutdown
-        await asyncio.sleep(0.1)   # Give it time to react
-        loop_task.cancel()
-        try:
-            await loop_task
-        except asyncio.CancelledError:
-            pass
+    # Patch TICK_INTERVAL_SECONDS to 0.01s so the loop doesn't sleep 60s between ticks
+    original_tick = scheduler.TICK_INTERVAL_SECONDS
+    scheduler.TICK_INTERVAL_SECONDS = 0.01
+    original_reply = scheduler.REPLY_INTERVAL_SECONDS
+    scheduler.REPLY_INTERVAL_SECONDS = 0.01
+    original_daily = scheduler.DAILY_INTERVAL_SECONDS
+    scheduler.DAILY_INTERVAL_SECONDS = 0.1
+    try:
+        # Run scheduler loop briefly, then set _running = False
+        async def run_and_stop():
+            loop_task = asyncio.create_task(scheduler._scheduler_loop())
+            await asyncio.sleep(0.05)  # Let it start and run reply tasks
+            scheduler._running = False  # Request shutdown
+            await asyncio.sleep(0.2)   # Give it time to react
+            loop_task.cancel()
+            try:
+                await loop_task
+            except asyncio.CancelledError:
+                pass
 
-    await run_and_stop()
+        await run_and_stop()
+    finally:
+        scheduler.TICK_INTERVAL_SECONDS = original_tick
+        scheduler.REPLY_INTERVAL_SECONDS = original_reply
+        scheduler.DAILY_INTERVAL_SECONDS = original_daily
 
     # Task 1 (process_scheduled_campaigns) should have been called
     scheduler.process_scheduled_campaigns.assert_awaited()
@@ -104,28 +119,40 @@ async def test_loop_does_not_run_tasks_after_break(mock_all_tasks):
     """After _running becomes False, remaining tasks should not execute."""
     scheduler._running = True
 
-    # Make Task 1 trigger shutdown
-    original_task1 = scheduler.process_scheduled_campaigns
-
-    async def task1_and_stop():
-        await original_task1()
-        scheduler._running = False  # Request shutdown during Task 1
-        return 0
-
-    scheduler.process_scheduled_campaigns = AsyncMock(side_effect=task1_and_stop)
-
-    loop_task = asyncio.create_task(scheduler._scheduler_loop())
-    await asyncio.sleep(0.1)
-    loop_task.cancel()
+    # Patch intervals to very small values so the loop doesn't hang
+    original_tick = scheduler.TICK_INTERVAL_SECONDS
+    scheduler.TICK_INTERVAL_SECONDS = 0.01
+    original_reply = scheduler.REPLY_INTERVAL_SECONDS
+    scheduler.REPLY_INTERVAL_SECONDS = 0.01
+    original_daily = scheduler.DAILY_INTERVAL_SECONDS
+    scheduler.DAILY_INTERVAL_SECONDS = 0.1
     try:
-        await loop_task
-    except asyncio.CancelledError:
-        pass
+        # Make Task 1 trigger shutdown
+        original_task1 = scheduler.process_scheduled_campaigns
 
-    # Task 1 was called
-    scheduler.process_scheduled_campaigns.assert_awaited()
-    # Task 2 should NOT have been called (break happened)
-    scheduler.process_buyer_replies.assert_not_awaited()
+        async def task1_and_stop():
+            await original_task1()
+            scheduler._running = False  # Request shutdown during Task 1
+            return 0
+
+        scheduler.process_scheduled_campaigns = AsyncMock(side_effect=task1_and_stop)
+
+        loop_task = asyncio.create_task(scheduler._scheduler_loop())
+        await asyncio.sleep(0.2)
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+
+        # Task 1 was called
+        scheduler.process_scheduled_campaigns.assert_awaited()
+        # Task 2 should NOT have been called (break happened)
+        scheduler.process_buyer_replies.assert_not_awaited()
+    finally:
+        scheduler.TICK_INTERVAL_SECONDS = original_tick
+        scheduler.REPLY_INTERVAL_SECONDS = original_reply
+        scheduler.DAILY_INTERVAL_SECONDS = original_daily
 
 
 # ---------------------------------------------------------------------------
