@@ -121,7 +121,7 @@ async def create_buyer(
 
     db.add(buyer)
     await db.commit()
-    await db.refresh(buyer)
+    await db.refresh(buyer, attribute_names=["buyer_emails"])
 
     # Run email verification in background.
     # Embedding is auto-triggered AFTER verification succeeds (chained in _verify_email_background).
@@ -199,7 +199,7 @@ async def update_buyer(
         await invalidate_queued_matches_for_buyer(db, buyer.id)
 
     await db.commit()
-    await db.refresh(buyer)
+    await db.refresh(buyer, attribute_names=["buyer_emails"])
     return buyer
 
 
