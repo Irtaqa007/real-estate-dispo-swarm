@@ -73,6 +73,14 @@ async def launch_campaign_for_buyer(
     buyer_id = buyer.id
     deal_id = deal.id
 
+    # Re-fetch deal and buyer fresh to avoid MissingGreenlet on expired ORM objects
+    from sqlalchemy import select as _select
+    _deal_result = await db.execute(_select(Deal).where(Deal.id == deal_id))
+    deal = _deal_result.scalar_one()
+    from app.models.models import Buyer as _Buyer
+    _buyer_result = await db.execute(_select(_Buyer).where(_Buyer.id == buyer_id))
+    buyer = _buyer_result.scalar_one()
+
     # ── Idempotency: skip if campaigns already exist for this buyer+deal ──
     existing = await db.execute(
         select(Campaign).where(
@@ -166,7 +174,7 @@ async def launch_campaign_for_buyer(
             property_type=deal.property_type,
             arv=float(deal.arv),
             asking_price=float(deal.asking_price),
-            spread=float(deal.spread) if deal.spread else 0,
+            spread=float(deal.asking_price - deal.contract_price) if deal.asking_price and deal.contract_price else 0,
             condition_description=deal.condition_description,
             beds=deal.beds,
             baths=deal.baths,

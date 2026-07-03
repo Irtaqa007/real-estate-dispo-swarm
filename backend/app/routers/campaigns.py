@@ -722,7 +722,7 @@ async def launch_campaign(
 
     # 3b. Calculate Deal Priority Score
     days_since_upload = (datetime.now(timezone.utc) - deal.created_at).days
-    spread_value = float(deal.spread) if deal.spread else 0
+    spread_value = float(deal.asking_price - deal.contract_price) if deal.asking_price and deal.contract_price else 0
     jv_reliability_score = 100
     if jv_partner is not None:
         jv_reliability_score = max(0, 100 - (jv_partner.title_issue_rate or 0) * 100)
@@ -882,6 +882,9 @@ async def launch_campaign(
             tier_counts[tier] += 1
 
     # 4. Generate campaigns for each buyer via shared function
+    # Re-fetch deal fresh to avoid MissingGreenlet on expired ORM attributes
+    _fresh = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = _fresh.scalar_one()
     all_results: List[CampaignLaunchResult] = []
     total_touches_created = 0
 
