@@ -251,9 +251,17 @@ async def _send_email_inner(
         raise ValueError(error_msg)
 
     sender = from_email or gmail_addr
+    # Use display name format: "Irtaqa Naveed <email@gmail.com>"
+    from app.config import settings as _settings
+    display_name = _settings.operator_name or ""
+    from email.headerregistry import Address as _Addr
+    if display_name and "<" not in sender:
+        sender_header = f"{display_name} <{sender}>"
+    else:
+        sender_header = sender
 
     msg = EmailMessage()
-    msg["From"] = sender
+    msg["From"] = sender_header
     msg["To"] = to
     msg["Subject"] = subject
     msg["Reply-To"] = sender
