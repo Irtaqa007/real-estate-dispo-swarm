@@ -717,12 +717,8 @@ async def launch_campaign(
                     "Predictive JV flagging for deal %s (%s): %s",
                     deal_id, deal.address, jv_warning,
                 )
-                # Add warning to deal notes
-                existing_notes = deal.notes or ""
-                warning_note = f"[JV WARNING {datetime.now(timezone.utc).strftime('%Y-%m-%d')}]: {jv_warning}"
-                if warning_note not in existing_notes:
-                    deal.notes = f"{existing_notes}\n{warning_note}".strip()
-                    db.add(deal)
+                # Log warning to activity log (Deal model has no notes column)
+                logger.warning("JV partner warning for deal %s: %s", deal_id, jv_warning)
 
     # 3b. Calculate Deal Priority Score
     days_since_upload = (datetime.now(timezone.utc) - deal.created_at).days

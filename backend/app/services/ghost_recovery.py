@@ -65,7 +65,7 @@ TOUCH_ARCS = {
             "Format: '[First name] — still looking at deals in [their market]?' "
             "Nothing else. No context, no re-pitch, no explanation. "
             "The brevity is intentional — it signals confidence, not desperation. "
-            f"Sign with {settings.operator_email_signature} on a new line."
+            f"Sign with {settings.operator_signature} on a new line."
         ),
     },
     5: {
@@ -82,7 +82,7 @@ TOUCH_ARCS = {
             "3. Wish them well. "
             "No ask. No CTA. The relationship stays warm even as the deal closes. "
             "Never mention why they didn't respond. Never mention the silence. "
-            f"Sign with {settings.operator_email_signature}."
+            f"Sign with {settings.operator_signature}."
         ),
     },
 }
@@ -94,7 +94,7 @@ TOUCH_ARCS = {
 _SYSTEM_PROMPT = (
     f"OPERATOR IDENTITY — you ARE this person in all recovery emails:\n"
     f"Name: {settings.operator_name}\n"
-    f"Sign-off: {settings.operator_email_signature}\n"
+    f"Sign-off: {settings.operator_signature}\n"
     f"Tone: {settings.operator_tone}\n"
     f"Never use: {settings.operator_never_say}\n"
     f"Context: {settings.operator_context}\n\n"
@@ -117,7 +117,7 @@ def _build_operator_identity_block() -> str:
         "\n"
         "OPERATOR IDENTITY (you ARE this person, write as them):\n"
         f"Name: {settings.operator_name}\n"
-        f"Sign-off: {settings.operator_email_signature}\n"
+        f"Sign-off: {settings.operator_signature}\n"
         f"Tone: {settings.operator_tone}\n"
         f"Never use these words/phrases: {settings.operator_never_say}\n"
         f"Personal context (use naturally if relevant):\n"
@@ -290,8 +290,8 @@ async def generate_ghost_recovery_email(
         body = (parsed.get("body") or "").strip()
 
         # Append operator sign-off if not already present
-        sign_off = settings.operator_email_signature.strip()
-        if sign_off and not body.rstrip().endswith(sign_off):
+        sign_off = settings.operator_signature.strip()
+        if sign_off and sign_off not in body:
             body = body.rstrip() + "\n\n" + sign_off
 
         # ── AI Validation pre-send guard ──
@@ -315,7 +315,7 @@ async def generate_ghost_recovery_email(
                     "body": body,
                     "touch_number": touch_number,
                     "validation_blocked": True,
-                    "validation_violations": validation["violations"],
+                    "validation_violations": validation.violations,
                 }
         except Exception as val_err:
             logger.error(
@@ -345,7 +345,7 @@ async def generate_ghost_recovery_email(
                 f"Hi {buyer.full_name},\n\n"
                 f"Circling back on {deal.address} — wanted to see if you're still "
                 f"looking in {market}.\n\n"
-                f"{settings.operator_email_signature}"
+                f"{settings.operator_signature}"
             ),
             "touch_number": touch_number,
         }
@@ -359,7 +359,7 @@ async def generate_ghost_recovery_email(
             "body": (
                 f"Hi {buyer.full_name},\n\n"
                 f"Just checking in on {deal.address}.\n\n"
-                f"{settings.operator_email_signature}"
+                f"{settings.operator_signature}"
             ),
             "touch_number": touch_number,
         }

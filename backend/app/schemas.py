@@ -79,6 +79,24 @@ class BuyerResponse(BuyerBase):
 
     model_config = {"from_attributes": True}
 
+    @model_validator(mode="before")
+    @classmethod
+    def compute_derived(cls, data: object) -> object:
+        """Compute has_embedding and additional_emails from ORM object."""
+        if not hasattr(data, "_sa_instance_state"):
+            return data
+        inst_dict = data.__dict__
+        d = {k: v for k, v in inst_dict.items() if not k.startswith("_")}
+        d["has_embedding"] = inst_dict.get("buy_box_embedding") is not None
+        emails = []
+        primary = inst_dict.get("email", "")
+        for be in inst_dict.get("buyer_emails", []) or []:
+            e = getattr(be, "email", None)
+            if e and e.lower() != (primary or "").lower():
+                emails.append(e)
+        d["additional_emails"] = emails
+        return d
+
 
 class JVPartnerBase(BaseModel):
     """Shared fields for JV partner CRUD operations."""

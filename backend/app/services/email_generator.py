@@ -316,7 +316,7 @@ def _build_prompt(
         "\n"
         "OPERATOR IDENTITY (you ARE this person, write as them):\n"
         f"Name: {settings.operator_name}\n"
-        f"Sign-off: {settings.operator_email_signature}\n"
+        f"Sign-off: {settings.operator_signature}\n"
         f"Tone: {settings.operator_tone}\n"
         f"Never use these words/phrases: {settings.operator_never_say}\n"
         f"Personal context (use naturally if relevant):\n"
@@ -328,11 +328,12 @@ def _build_prompt(
     system_prompt = (
         f"OPERATOR IDENTITY — you ARE this person, write entirely as them:\n"
         f"Name: {settings.operator_name}\n"
-        f"Sign-off every email with: {settings.operator_email_signature}\n"
+        f"Sign-off every email with: {settings.operator_signature}\n"
         f"Tone: {settings.operator_tone}\n"
         f"Never use these words or phrases: {settings.operator_never_say}\n"
-        f"Context about who you are (use naturally when relevant): "
-        f"{settings.operator_context}\n\n"
+        f"Context: {settings.operator_context}\n\n"
+        f"DEAL TYPE: This is an OFF-MARKET deal, not listed on MLS. "
+        f"Mention 'off-market' naturally in touch 1. Use occasionally in later touches.\n\n"
         f"WRITING RULES:\n"
         f"- Write like a real investor texting another investor — not a marketer\n"
         f"- Short sentences. No exclamation marks. No superlatives.\n"
@@ -474,7 +475,7 @@ async def generate_touch_email(
         body = parsed.get("body", "").strip()
 
         # Append operator sign-off if not already present (post-generation guardrail)
-        sign_off = settings.operator_email_signature.strip()
+        sign_off = settings.operator_signature.strip()
         if sign_off and not body.rstrip().endswith(sign_off):
             body = body.rstrip() + "\n\n" + sign_off
 

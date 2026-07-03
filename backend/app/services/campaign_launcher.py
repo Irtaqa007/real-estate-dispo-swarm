@@ -9,6 +9,7 @@ with staggered scheduling by tier, and sends touch 1 immediately for A-List.
 """
 
 import logging
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -182,6 +183,11 @@ async def launch_campaign_for_buyer(
             pref_cities=buyer.pref_cities,
         )
 
+        # Skip touch if Groq failed — never send fallback garbage
+        if email_data.get("status") == "Failed":
+            logger.error("Skipping touch %d for buyer %s — email generation failed", touch_num, buyer_id)
+            continue
+
         # ── Staggered scheduling by tier ──
         # A-List: touch 1 sends immediately
         # B-List: touch 1 scheduled for day 1
@@ -204,6 +210,14 @@ async def launch_campaign_for_buyer(
             elif buyer_tier == "C-List":
                 base_time = launch_time + timedelta(days=3)
             scheduled_send = base_time + timedelta(days=config["delay_days"])
+
+        # Add human-like jitter: random offset so emails never land at exact intervals
+        if touch_status == "Queued":
+            jitter_hours = random.uniform(-3, 4)
+            jittered = scheduled_send + timedelta(hours=jitter_hours)
+            if jittered < launch_time + timedelta(minutes=30):
+                jittered = scheduled_send + timedelta(hours=abs(jitter_hours))
+            scheduled_send = jittered
 
         campaign_record = Campaign(
             id=uuid.uuid4(),

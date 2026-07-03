@@ -29,6 +29,7 @@ from app.services.buyer_scoring import run_tier_promotions, reset_pitch_counters
 from app.services.aging_monitor import run_aging_monitor
 from app.services.buyer_insights import update_all_buyer_insights
 from app.services.embeddings import generate_embedding
+from app.services.conversation_engine import process_conversation
 from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold, match_reply_to_campaign
 from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
@@ -687,6 +688,7 @@ async def process_buyer_replies() -> int:
                             )
 
                     # 10b. Auto-Follow-Up on Question replies
+                    question_answer = None  # Initialize before conditional
                     if reply_intent == "Question":
                         # ── FEATURE 2: Uncertainty detection — graceful hold if AI can't answer ──
                         hold_response = await detect_uncertainty_and_hold(
@@ -1821,6 +1823,7 @@ async def _scheduler_loop() -> None:
                         logger.error("Scheduler: DLQ auto-retry failed: %s", e, exc_info=True)
 
                 async def _task_auto_match() -> None:
+                    nonlocal _last_auto_match_time
                     hours_since = (
                         datetime.now(timezone.utc) - _last_auto_match_time
                     ).total_seconds() / 3600

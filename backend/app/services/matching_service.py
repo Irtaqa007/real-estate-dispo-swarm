@@ -25,7 +25,7 @@ from app.services.campaign_launcher import launch_campaign_for_buyer
 logger = logging.getLogger(__name__)
 
 # Campaign statuses that count as an "active" deal for the 2-deal cap
-ACTIVE_DEAL_STATUSES = ("Sent", "Replied", "Under Contract", "Contract_Pending")
+ACTIVE_DEAL_STATUSES = ("Queued", "Sent", "Replied", "Under Contract", "Contract_Pending")
 
 # Default match limit
 DEFAULT_MATCH_LIMIT = 20

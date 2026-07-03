@@ -1,5 +1,6 @@
 """Buyer CRUD API endpoints."""
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -90,9 +91,10 @@ async def create_buyer(
         await invalidate_queued_matches_for_buyer(db, existing_buyer.id)
 
         await db.commit()
-        # Explicitly load the buyer_emails relationship so additional_emails
-        # property is populated in the response
-        await db.refresh(existing_buyer, attribute_names=["buyer_emails"])
+        result2 = await db.execute(
+            select(Buyer).options(selectinload(Buyer.buyer_emails)).where(Buyer.id == existing_buyer.id)
+        )
+        existing_buyer = result2.scalar_one()
 
         logger.info(
             "Buyer %s (%s) updated via dedup merge (reason=%s)",
@@ -121,7 +123,10 @@ async def create_buyer(
 
     db.add(buyer)
     await db.commit()
-    await db.refresh(buyer, attribute_names=["buyer_emails"])
+    result2 = await db.execute(
+        select(Buyer).options(selectinload(Buyer.buyer_emails)).where(Buyer.id == buyer.id)
+    )
+    buyer = result2.scalar_one()
 
     # Run email verification in background.
     # Embedding is auto-triggered AFTER verification succeeds (chained in _verify_email_background).
@@ -199,7 +204,10 @@ async def update_buyer(
         await invalidate_queued_matches_for_buyer(db, buyer.id)
 
     await db.commit()
-    await db.refresh(buyer, attribute_names=["buyer_emails"])
+    result2 = await db.execute(
+        select(Buyer).options(selectinload(Buyer.buyer_emails)).where(Buyer.id == buyer.id)
+    )
+    buyer = result2.scalar_one()
     return buyer
 
 
@@ -266,6 +274,36 @@ async def _generate_buyer_embedding_background(buyer_id: uuid.UUID, buy_box: str
     except Exception as e:
         logger.warning("Background buy-box embedding failed for buyer %s: %s", buyer_id, e, exc_info=True)
 
+
+
+
+@router.post("/{buyer_id}/embed", response_model=BuyerResponse)
+async def generate_buyer_embedding(
+    buyer_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually trigger buy-box embedding generation for a buyer."""
+    result = await db.execute(
+        select(Buyer).options(selectinload(Buyer.buyer_emails)).where(Buyer.id == buyer_id)
+    )
+    buyer = result.scalar_one_or_none()
+    if not buyer:
+        raise HTTPException(status_code=404, detail=f"Buyer {buyer_id} not found")
+    if not buyer.buy_box:
+        raise HTTPException(status_code=400, detail="Buyer has no buy_box to embed")
+    try:
+        from app.services.embeddings import generate_embedding
+        embedding = await generate_embedding(buyer.buy_box, input_type="search_query")
+        buyer.buy_box_embedding = embedding
+        await db.commit()
+        logger.info("Embedding generated for buyer %s", buyer_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {e}")
+    result = await db.execute(
+        select(Buyer).options(selectinload(Buyer.buyer_emails)).where(Buyer.id == buyer_id)
+    )
+    buyer = result.scalar_one()
+    return buyer
 
 @router.get("/unsubscribe/{token}")
 async def unsubscribe_from_email(

@@ -133,4 +133,10 @@ class Settings(BaseSettings):
             return 5432
 
 
+    @property
+    def operator_signature(self) -> str:
+        """Return operator_email_signature with literal \\n replaced by real newlines."""
+        return self.operator_email_signature.replace("\\n", "\n")
+
+
 settings = Settings()

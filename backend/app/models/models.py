@@ -232,6 +232,12 @@ class Campaign(Base):
     pass_reason_raw = Column(Text, nullable=True)  # Buyer's exact words (max 500 chars)
     pass_reason_confidence = Column(Text, nullable=True)  # high, medium, low
     passed_at = Column(DateTime(timezone=True), nullable=True)
+    # Conversation state machine fields
+    conversation_stage = Column(Text, default="pitching")
+    buyer_legal_name = Column(Text, nullable=True)
+    buyer_phone = Column(Text, nullable=True)
+    buyer_title_company = Column(Text, nullable=True)
+    agreed_price = Column(Numeric(19, 2), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -307,6 +313,29 @@ class QueuedDealMatch(Base):
 
     def __repr__(self) -> str:
         return f"<QueuedDealMatch(id={self.id}, buyer={self.buyer_id}, deal={self.deal_id}, status={self.status})>"
+
+
+class TitleCompany(Base):
+    """Title company contact stored per deal."""
+    __tablename__ = "title_companies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=False, index=True)
+    company_name = Column(Text, nullable=False)
+    contact_name = Column(Text, nullable=True)
+    contact_email = Column(Text, nullable=False)
+    contact_phone = Column(Text, nullable=True)
+    file_number = Column(Text, nullable=True)
+    status = Column(Text, default="opened")
+    notes = Column(Text, nullable=True)
+    opened_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_contact_at = Column(DateTime(timezone=True), nullable=True)
+    closing_date = Column(DateTime(timezone=True), nullable=True)
+    chase_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    deal = relationship("Deal", backref="title_companies")
 
 
 class FailedCampaign(Base):
