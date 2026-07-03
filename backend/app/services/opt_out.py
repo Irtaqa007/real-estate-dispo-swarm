@@ -113,12 +113,25 @@ UNSUBSCRIBE_FOOTER = (
 def append_unsubscribe_footer(body: str, buyer_id: UUID) -> str:
     """Append a CAN-SPAM compliant unsubscribe footer to an email body.
 
-    Args:
-        body: The email body text.
-        buyer_id: The buyer's UUID for generating the unique link.
-
-    Returns:
-        Body with unsubscribe footer appended.
+    Strips any existing sign-off first, appends footer, then sign-off goes
+    last so the email structure is: body → sign-off → footer.
+    Actually: body → unsubscribe footer (sign-off handled by caller).
     """
+    from app.config import settings
+    sign_off = settings.operator_signature.strip()
+
+    # Strip sign-off from end of body before inserting footer
+    # so footer appears between body and sign-off
+    body_stripped = body.rstrip()
+    if sign_off and body_stripped.endswith(sign_off):
+        body_without_signoff = body_stripped[:-len(sign_off)].rstrip()
+    else:
+        body_without_signoff = body_stripped
+
     url = build_unsubscribe_url(buyer_id)
-    return body + UNSUBSCRIBE_FOOTER.format(unsubscribe_url=url)
+    footer = UNSUBSCRIBE_FOOTER.format(unsubscribe_url=url)
+
+    # Structure: body → sign-off → footer
+    if sign_off:
+        return body_without_signoff + "\n\n" + sign_off + footer
+    return body_without_signoff + footer
