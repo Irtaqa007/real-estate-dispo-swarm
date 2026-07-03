@@ -474,15 +474,14 @@ async def generate_touch_email(
         subject = parsed.get("subject", "").strip()
         body = parsed.get("body", "").strip()
 
-        # Append unsubscribe footer if buyer_id is known
+        # Append unsubscribe footer (which also handles sign-off placement)
         if buyer_id is not None:
             body = append_unsubscribe_footer(body, buyer_id)
-
-        # Append operator sign-off if not already present (post-generation guardrail)
-        # Must run AFTER unsubscribe footer so we don't double-append
-        sign_off = settings.operator_signature.strip()
-        if sign_off and sign_off not in body:
-            body = body.rstrip() + "\n\n" + sign_off
+        else:
+            # No unsubscribe footer — ensure sign-off is present
+            sign_off = settings.operator_signature.strip()
+            if sign_off and sign_off not in body:
+                body = body.rstrip() + "\n\n" + sign_off
 
         logger.info("Generated touch %d for %s: '%s'", touch, buyer_name, subject[:60])
 

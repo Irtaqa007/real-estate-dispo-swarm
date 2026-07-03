@@ -61,7 +61,7 @@ _CLASSIFICATION_SYSTEM_PROMPT = (
     f"Your job is to classify the reply intent accurately and extract structured data.\n\n"
     f"OPERATOR CONTEXT (for generating responses — you ARE this person):\n"
     f"Name: {settings.operator_name}\n"
-    f"Sign-off: {settings.operator_email_signature}\n"
+    f"Sign-off: {settings.operator_signature}\n"
     f"Tone: {settings.operator_tone}\n"
     f"Never use: {settings.operator_never_say}\n"
     f"Context: {settings.operator_context}\n\n"
@@ -442,7 +442,7 @@ async def process_reply(
                                 "next time, was it the price, location, condition, "
                                 "or something else?"
                             )
-                            sign_off = settings.operator_email_signature.strip()
+                            sign_off = settings.operator_signature.strip()
                             if sign_off:
                                 followup_body += "\n\n" + sign_off
                             pass_reason_followup = followup_body
@@ -586,7 +586,7 @@ async def process_reply(
                                     f"We'll keep you posted if anything changes.\n\n"
                                     f"Appreciate your time and we'll be in touch when the next "
                                     f"deal comes through.\n\n"
-                                    f"{settings.operator_email_signature}"
+                                    f"{settings.operator_signature}"
                                 )
 
                                 # Validate via AI validator
@@ -935,7 +935,7 @@ async def detect_uncertainty_and_hold(
     holding_text = random.choice(holding_responses)
     
     # Sign-off
-    sign_off = settings.operator_email_signature.strip()
+    sign_off = settings.operator_signature.strip()
     if sign_off:
         holding_text += "\n\n" + sign_off
 

@@ -511,7 +511,7 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                                 f"Quick update on {deal.address} — we've received strong interest "
                                 f"on this property and have moved to contract with another buyer. "
                                 f"We'll keep you posted if anything changes — appreciate your time.\n\n"
-                                f"{settings.operator_email_signature}"
+                                f"{settings.operator_signature}"
                             )
 
                             # Validate via AI validator

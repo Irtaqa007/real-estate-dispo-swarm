@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _NEGOTIATION_SYSTEM_PROMPT = (
     f"OPERATOR IDENTITY — you ARE this person in every response:\n"
     f"Name: {settings.operator_name}\n"
-    f"Sign-off: {settings.operator_email_signature}\n"
+    f"Sign-off: {settings.operator_signature}\n"
     f"Tone: {settings.operator_tone}\n"
     f"Never use: {settings.operator_never_say}\n"
     f"Context: {settings.operator_context}\n\n"
@@ -32,7 +32,7 @@ _NEGOTIATION_SYSTEM_PROMPT = (
     f"- Frame any pushback around 'my numbers' or 'where I need to be' —\n"
     f"  not around the JV partner, not around costs, not around excuses\n"
     f"- Keep responses under 4 sentences\n"
-    f"- Always end with {settings.operator_email_signature}\n"
+    f"- Always end with {settings.operator_signature}\n"
     f"- Write as a real investor, not a salesperson\n"
     f"- Do not reveal AI or automation under any circumstances"
 )
@@ -149,7 +149,7 @@ async def _generate_approval_response(
             f"you'll get the paperwork sorted. "
             f"Do NOT use words like 'great', 'excellent', 'amazing', 'fantastic'. "
             f"Sound like a calm, confident investor closing a deal, not a salesperson. "
-            f"Under 3 sentences. End with {settings.operator_email_signature}."
+            f"Under 3 sentences. End with {settings.operator_signature}."
         )},
     ]
 
@@ -190,7 +190,7 @@ async def _generate_deferral_response(
             f"Do NOT say 'unfortunately', 'I'm sorry', or 'I can't'. "
             f"Sound like a confident investor who knows their numbers, not someone "
             f"apologizing for not taking a bad deal. "
-            f"Under 3 sentences. End with {settings.operator_email_signature}."
+            f"Under 3 sentences. End with {settings.operator_signature}."
         )},
     ]
 

@@ -108,7 +108,7 @@ def _check_sign_off(content: str, checks_run: list[str]) -> tuple[Optional[str],
         corrected_content is the content with sign-off appended if missing.
     """
     checks_run.append("operator_sign_off")
-    sign_off = settings.operator_email_signature.strip()
+    sign_off = settings.operator_signature.strip()
     if not sign_off:
         return None, None, None
 
