@@ -828,7 +828,7 @@ function ViewModal({
         <Row label="Asking Price" value={formatCurrency(deal.asking_price)} />
         <Row label="Floor Price" value={formatCurrency(deal.floor_price)} />
         <Row label="Contract Price" value={formatCurrency(deal.contract_price)} />
-        <Row label="Spread" value={deal.spread != null ? formatCurrency(deal.spread) : "Pending"} />
+        <Row label="Assignment Fee" value={deal.spread != null ? formatCurrency(deal.spread) : "Pending"} />
         <Row
           label="Status"
           value={
@@ -1442,7 +1442,7 @@ export default function DealsPage() {
                       <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">ARV</th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Asking</th>
-                      <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Spread</th>
+                      <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Assign. Fee</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Assigned Buyer</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">JV Partner</th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Actions</th>

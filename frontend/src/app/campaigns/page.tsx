@@ -35,7 +35,9 @@ interface Campaign {
   buyer_id: string;
   touch_number: number;
   status: string;
+  conversation_stage: string | null;
   sent_at: string | null;
+  scheduled_send_at: string | null;
   subject: string | null;
   body: string | null;
   reply_received_at: string | null;
@@ -43,6 +45,10 @@ interface Campaign {
   reply_intent: string | null;
   ai_extracted_insights: string | null;
   buyer_profile_updated: boolean;
+  buyer_legal_name: string | null;
+  buyer_phone: string | null;
+  buyer_title_company: string | null;
+  agreed_price: number | null;
   created_at: string;
 }
 

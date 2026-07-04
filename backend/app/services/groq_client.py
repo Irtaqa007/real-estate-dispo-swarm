@@ -11,7 +11,7 @@ Usage:
     client = get_groq_client()
     response = await rate_limited_groq_call(
         client.chat.completions.create,
-        model="llama-3.3-70b-versatile",
+        model=settings.groq_model,
         messages=messages,
         temperature=0.7,
         max_tokens=300,
