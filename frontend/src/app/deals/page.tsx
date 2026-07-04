@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 
 import { useEffect, useState, useCallback } from "react";
 import { usePolling } from "@/hooks/usePolling";
@@ -26,6 +27,7 @@ import {
   FileText,
   Image,
   Loader2,
+  ExternalLink,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -1508,6 +1510,13 @@ export default function DealsPage() {
                             >
                               <Pencil className="w-4 h-4" />
                             </button>
+                            <Link
+                              href={`/deals/${d.id}`}
+                              className="p-1.5 rounded-md text-slate-400 hover:text-green-400 hover:bg-slate-700 transition-colors inline-flex items-center"
+                              title="View deal detail"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </Link>
                             {(d.status === "Available" || d.status === "Campaign Launched") && (
                               <button
                                 onClick={() => handleFindBuyers(d.id)}

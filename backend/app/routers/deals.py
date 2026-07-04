@@ -528,6 +528,46 @@ async def close_deal(
     )
 
 
+
+
+@router.get("/{deal_id}/campaigns")
+async def get_deal_campaigns(
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all campaigns for a deal with conversation stage and reply info."""
+    from app.models.models import Campaign
+    result = await db.execute(
+        select(Campaign)
+        .where(Campaign.deal_id == deal_id)
+        .order_by(Campaign.touch_number.asc(), Campaign.created_at.asc())
+    )
+    campaigns = result.scalars().all()
+    return [
+        {
+            "id": str(c.id),
+            "buyer_id": str(c.buyer_id),
+            "touch_number": c.touch_number,
+            "status": c.status,
+            "conversation_stage": c.conversation_stage,
+            "sent_at": c.sent_at.isoformat() if c.sent_at else None,
+            "scheduled_send_at": c.scheduled_send_at.isoformat() if c.scheduled_send_at else None,
+            "subject": c.subject,
+            "body": c.body,
+            "reply_received_at": c.reply_received_at.isoformat() if c.reply_received_at else None,
+            "reply_body": c.reply_body,
+            "reply_intent": c.reply_intent,
+            "ai_extracted_insights": c.ai_extracted_insights,
+            "buyer_legal_name": c.buyer_legal_name,
+            "buyer_phone": c.buyer_phone,
+            "buyer_title_company": c.buyer_title_company,
+            "agreed_price": float(c.agreed_price) if c.agreed_price else None,
+            "pass_reason_category": c.pass_reason_category,
+            "pass_reason_raw": c.pass_reason_raw,
+        }
+        for c in campaigns
+    ]
+
 @router.get("/{deal_id}/pass-intelligence")
 async def get_deal_pass_intelligence(
     deal_id: uuid.UUID,

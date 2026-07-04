@@ -16,7 +16,7 @@ from app.middleware import (
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-from app.routers import activity, alerts, buyers, campaigns, deals, failed_campaigns, health, jv_partners, matching, title
+from app.routers import activity, alerts, buyers, campaigns, deals, failed_campaigns, health, jv_partners, matching, title, title_companies
 from app.database import register_pgvector_extension, test_connection, initialize_db
 from app.services.scheduler import start_scheduler, stop_scheduler
 from app.services.state_persistence import load_all_state
@@ -191,6 +191,7 @@ app.include_router(campaigns.router)
 app.include_router(failed_campaigns.router)
 app.include_router(activity.router)
 app.include_router(title.router)
+app.include_router(title_companies.router)
 app.include_router(alerts.router)
 
 
