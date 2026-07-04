@@ -175,6 +175,7 @@ async def launch_campaign_for_buyer(
             arv=float(deal.arv),
             asking_price=float(deal.asking_price),
             spread=float(deal.asking_price - deal.contract_price) if deal.asking_price and deal.contract_price else 0,
+            rehab_estimate=float(deal.repair_estimate) if deal.repair_estimate else None,
             condition_description=deal.condition_description,
             beds=deal.beds,
             baths=deal.baths,

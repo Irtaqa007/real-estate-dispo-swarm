@@ -193,6 +193,7 @@ def _build_prompt(
     asking_price: float,
     spread: float,
     condition_description: str,
+    rehab_estimate: Optional[float] = None,
     beds: Optional[int] = None,
     baths: Optional[float] = None,
     sqft: Optional[int] = None,
@@ -356,13 +357,13 @@ def _build_prompt(
         f"Address: {address} — OFF-MARKET, not listed on MLS\n"
         f"Market: {market}\n"
         f"Property Type: {property_summary}\n"
-        f"ARV: ${arv:,.0f}\n"
-        f"Asking: ${asking_price:,.0f}\n"
-        f"Assignment fee / spread: ${spread:,.0f} (this is asking minus contract price — your profit on the flip)\n"
         f"Condition: {condition_description}\n"
-        f"SPREAD CONTEXT: When referencing the spread/margin in your email, explain it correctly — "
-        f"the ${spread:,.0f} is the assignment fee (what the buyer gets if they close at asking). "
-        f"If rehab is mentioned, note total all-in cost will be asking + rehab. Never say spread = ARV - asking.\n"
+        f"\n"
+        f"\n"
+        f"KEY NUMBERS (use exactly as stated):\n"
+        f"  Asking: ${asking_price:,.0f}\n"
+        + (f"  Rehab: ${rehab_estimate:,.0f}\n  All-in: ${asking_price+rehab_estimate:,.0f}\n  ARV: ${arv:,.0f}\n  Buyer profit: ${arv-asking_price-rehab_estimate:,.0f}\n" if rehab_estimate else f"  ARV: ${arv:,.0f}\n  Spread (before rehab): ${arv-asking_price:,.0f}\n")
+        + f"\n"
         f"{intelligence_block}"
         f"PSYCHOLOGICAL ARC FOR TOUCH {touch}: {config['arc_description']}\n"
         f"REQUIRED POWER WORDS: {config['power_words']}\n"
@@ -374,6 +375,7 @@ def _build_prompt(
         f"SUBJECT FORMAT: Use numbers — e.g. '3/2 San Antonio | $165k | $47k spread' or similar. 6-10 words.\n"
         f"TOUCH 1 RULE: Must mention 'off-market' naturally in the body (not just subject).\n"
         f"Body must reference buyer's specific criteria.\n"
+        f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
         f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
     )
 
@@ -401,6 +403,7 @@ async def generate_touch_email(
     asking_price: float,
     spread: float,
     condition_description: str,
+    rehab_estimate: Optional[float] = None,
     beds: Optional[int] = None,
     baths: Optional[float] = None,
     sqft: Optional[int] = None,
@@ -478,6 +481,23 @@ async def generate_touch_email(
         parsed = json.loads(content)
         subject = parsed.get("subject", "").strip()
         body = parsed.get("body", "").strip()
+
+        # Post-process: strip any sign-off the AI included (it gets appended correctly later)
+        import re as _re
+        body = _re.sub(r'\n\s*Best,\s*\nIrtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
+        body = _re.sub(r'\n\s*Best,\s*Irtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
+
+        # Post-process: fix spread/profit numbers if AI computed wrong value
+        # The correct buyer profit is ARV - asking - rehab (if rehab known)
+        if rehab_estimate and rehab_estimate > 0:
+            correct_buyer_profit = arv - asking_price - rehab_estimate
+            wrong_spread = arv - asking_price  # AI tends to compute this instead
+            # Replace wrong spread references with correct buyer profit
+            wrong_str = f"${wrong_spread:,.0f}"
+            correct_str = f"${correct_buyer_profit:,.0f}"
+            if wrong_str in body and wrong_str != correct_str:
+                body = body.replace(wrong_str, correct_str)
+                logger.info("Post-processed: replaced wrong spread %s with correct buyer profit %s", wrong_str, correct_str)
 
         # Append unsubscribe footer (which also handles sign-off placement)
         if buyer_id is not None:
