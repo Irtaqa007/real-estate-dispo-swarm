@@ -260,7 +260,7 @@ export default function AnalyticsPage() {
     const info = getMonthYearKey(d.created_at);
     if (!info) return;
     const existing = monthlySpreadMap.get(info.key) || { month: info.label, sortKey: info.key, spread: 0, count: 0 };
-    existing.spread += d.spread || 0;
+    existing.spread += (d.spread || 0);
     existing.count += 1;
     monthlySpreadMap.set(info.key, existing);
   });
@@ -312,7 +312,7 @@ export default function AnalyticsPage() {
     const city = d.city || "Unknown";
     const existing = cityStatsMap.get(city) || { city, deals: 0, spread: 0, buyers: new Set() };
     existing.deals += 1;
-    existing.spread += d.spread || 0;
+    existing.spread += (d.spread || 0);
     if (d.assigned_buyer_id) existing.buyers.add(d.assigned_buyer_id);
     cityStatsMap.set(city, existing);
   });
@@ -420,7 +420,7 @@ export default function AnalyticsPage() {
                         fontSize: "12px",
                       }}
                       labelStyle={{ color: "#94a3b8" }}
-                      formatter={(value: number) => [formatCurrency(value), "Spread"]}
+                      formatter={(value: number) => [formatCurrency(value), "Assignment Fee"]}
                     />
                     <Line type="monotone" dataKey="spread" stroke="#3b82f6" strokeWidth={2} dot={{ fill: "#3b82f6", r: 4 }} activeDot={{ r: 6 }} />
                   </LineChart>

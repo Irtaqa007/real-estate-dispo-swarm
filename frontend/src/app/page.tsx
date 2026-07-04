@@ -395,7 +395,7 @@ export default function Dashboard() {
                         fontSize: "12px",
                       }}
                       labelStyle={{ color: "#94a3b8" }}
-                      formatter={(value: number) => [formatCurrency(value), "Spread"]}
+                      formatter={(value: number) => [formatCurrency(value), "Assignment Fee"]}
                     />
                     <Line type="monotone" dataKey="spread" stroke="#8b5cf6" strokeWidth={2} dot={{ fill: "#8b5cf6", r: 3 }} activeDot={{ r: 5 }} />
                   </LineChart>

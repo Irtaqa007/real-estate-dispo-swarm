@@ -187,8 +187,8 @@ export default function DealDetailPage() {
   );
 
   const buyerProfit = deal.repair_estimate
-    ? deal.arv - deal.asking_price - deal.repair_estimate
-    : deal.arv - deal.asking_price;
+    ? (deal.arv || 0) - (deal.asking_price || 0) - (deal.repair_estimate || 0)
+    : (deal.arv || 0) - (deal.asking_price || 0);
 
   const repliedCampaigns = campaigns.filter(c => c.reply_body);
   const activeCampaigns = campaigns.filter(c => ["Queued", "Sent", "Replied"].includes(c.status));
