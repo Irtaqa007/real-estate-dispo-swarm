@@ -76,6 +76,12 @@ interface Campaign {
   sent_at: string | null;
   reply_received_at: string | null;
   reply_intent: string | null;
+  conversation_stage: string | null;
+  buyer_legal_name: string | null;
+  buyer_phone: string | null;
+  buyer_title_company: string | null;
+  agreed_price: number | null;
+  scheduled_send_at: string | null;
 }
 
 interface SendingStatus {
