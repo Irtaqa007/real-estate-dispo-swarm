@@ -218,9 +218,29 @@ async def process_scheduled_campaigns() -> int:
 
                     body_to_send = validation.corrected_content or campaign.body
 
+                    # Fix subject spread at send time (catches campaigns generated before fix)
+                    subject_to_send = campaign.subject or ""
+                    if deal.repair_estimate and deal.asking_price and deal.arv:
+                        try:
+                            rehab = float(deal.repair_estimate)
+                            asking = float(deal.asking_price)
+                            arv = float(deal.arv)
+                            if rehab > 0:
+                                correct_profit = arv - asking - rehab
+                                wrong_spread = arv - asking
+                                wrong_k = f"${wrong_spread//1000:.0f}k"
+                                correct_k = f"${correct_profit//1000:.0f}k"
+                                wrong_full = f"${wrong_spread:,.0f}"
+                                correct_full = f"${correct_profit:,.0f}"
+                                subject_to_send = (subject_to_send
+                                    .replace(wrong_full, correct_full)
+                                    .replace(wrong_k, correct_k))
+                        except Exception:
+                            pass
+
                     result = await send_email(
                         to=buyer.email,
-                        subject=campaign.subject,
+                        subject=subject_to_send,
                         body=body_to_send,
                         campaign_id=campaign.id.hex,
                         send_type="campaign",
@@ -393,13 +413,187 @@ async def process_buyer_replies() -> int:
                         buyer_id, campaign.id, confidence_level, campaign.deal_id,
                     )
 
-                    # 5. Classify the reply via Groq (ghost recovery cancelled inside if needed)
-                    classification = await process_reply(
-                        reply,
-                        db=db,
-                        buyer_id=buyer_id,
-                        deal_id=campaign.deal_id,
+                    # 5. Load deal and buyer fresh to avoid expired ORM state
+                    _deal_r = await db.execute(select(Deal).where(Deal.id == campaign.deal_id))
+                    deal_obj = _deal_r.scalar_one_or_none()
+                    _buyer_r = await db.execute(select(Buyer).where(Buyer.id == buyer_id))
+                    buyer_obj = _buyer_r.scalar_one_or_none()
+
+                    if not deal_obj or not buyer_obj:
+                        logger.warning("Scheduler: deal or buyer not found for campaign %s", campaign.id)
+                        continue
+
+                    # Strip quoted thread from reply body before passing to AI
+                    import re as _re
+                    raw_body = reply.get("body", "")
+                    # Remove everything after "On ... wrote:" pattern (quoted original)
+                    clean_body = _re.split(r'\n\s*On .{10,100}wrote:\s*\n', raw_body)[0].strip()
+                    # Also remove lines starting with > (quoted lines)
+                    clean_body = "\n".join(
+                        line for line in clean_body.splitlines()
+                        if not line.strip().startswith(">")
+                    ).strip()
+                    if not clean_body:
+                        clean_body = raw_body[:500]  # Fallback if stripping removed everything
+
+                    # 5b. Build thread history for conversation engine
+                    _thread_r = await db.execute(
+                        select(Campaign).where(
+                            Campaign.buyer_id == buyer_id,
+                            Campaign.deal_id == campaign.deal_id,
+                        ).order_by(Campaign.sent_at.asc().nullslast())
                     )
+                    thread_campaigns = _thread_r.scalars().all()
+                    thread_history = []
+                    for tc in thread_campaigns:
+                        if tc.body:
+                            thread_history.append({"role": "assistant", "content": tc.body[:600]})
+                        if tc.reply_body:
+                            thread_history.append({"role": "user", "content": tc.reply_body[:600]})
+
+                    # 5c. Run conversation engine
+                    conv_result = await process_conversation(
+                        reply_body=clean_body,
+                        reply_subject=reply.get("subject", ""),
+                        buyer=buyer_obj,
+                        deal=deal_obj,
+                        campaign=campaign,
+                        thread_history=thread_history,
+                    )
+
+                    now = datetime.now(timezone.utc)
+                    new_stage = conv_result["new_stage"]
+                    next_message = conv_result.get("next_message")
+                    extracted = conv_result.get("extracted_info", {})
+
+                    # 6. Update campaign with reply + new stage
+                    campaign.reply_received_at = now
+                    campaign.reply_body = raw_body
+                    campaign.reply_intent = new_stage
+                    campaign.conversation_stage = new_stage
+                    campaign.ai_extracted_insights = str(conv_result.get("classification", {}).get("notes", ""))[:500]
+
+                    # Store extracted contract info
+                    if extracted.get("legal_name"):
+                        campaign.buyer_legal_name = extracted["legal_name"]
+                    if extracted.get("phone"):
+                        campaign.buyer_phone = extracted["phone"]
+                    if extracted.get("title_company"):
+                        campaign.buyer_title_company = extracted["title_company"]
+                    if extracted.get("agreed_price"):
+                        try:
+                            campaign.agreed_price = float(str(extracted["agreed_price"]).replace(",","").replace("$",""))
+                        except Exception:
+                            pass
+
+                    # Handle terminal states
+                    if conv_result["pass_detected"] or conv_result["unsubscribe_detected"]:
+                        campaign.status = "Passed"
+                        passed_buyer_ids.append(buyer_id)
+                        if conv_result["unsubscribe_detected"]:
+                            buyer_obj.unsubscribed_at = now
+                            buyer_obj.status = "Do Not Contact"
+                            _q = await db.execute(
+                                select(Campaign).where(
+                                    Campaign.buyer_id == buyer_id,
+                                    Campaign.status == "Queued",
+                                )
+                            )
+                            for qc in _q.scalars().all():
+                                qc.status = "Paused"
+                                db.add(qc)
+                    elif conv_result["contract_ready"]:
+                        campaign.status = "Contract_Pending"
+                        jv = await db.get(JVPartner, deal_obj.jv_partner_id) if deal_obj.jv_partner_id else None
+                        asking = float(deal_obj.asking_price)
+                        contract_p = float(deal_obj.contract_price)
+                        split_pct = float(deal_obj.jv_split_percentage or 50) / 100
+                        assignment_fee = asking - contract_p
+                        my_payout = assignment_fee * (1.0 - split_pct)
+                        db.add(ActivityLog(
+                            id=uuid.uuid4(),
+                            entity_type="deal",
+                            entity_id=campaign.deal_id,
+                            action="contract_ready",
+                            metadata_json={
+                                "alert_type": "contract_ready",
+                                "alert_user": True,
+                                "priority": "high",
+                                "buyer": {
+                                    "name": buyer_obj.full_name,
+                                    "email": buyer_obj.email,
+                                    "legal_name": campaign.buyer_legal_name,
+                                    "phone": campaign.buyer_phone,
+                                    "title_company": campaign.buyer_title_company,
+                                },
+                                "deal": {
+                                    "address": deal_obj.address,
+                                    "asking_price": asking,
+                                    "agreed_price": float(campaign.agreed_price) if campaign.agreed_price else asking,
+                                    "assignment_fee": assignment_fee,
+                                    "my_payout": my_payout,
+                                    "jv_partner": jv.name if jv else "",
+                                },
+                            },
+                        ))
+                        # Pause remaining touches
+                        _queued = await db.execute(
+                            select(Campaign).where(
+                                Campaign.buyer_id == buyer_id,
+                                Campaign.deal_id == campaign.deal_id,
+                                Campaign.status == "Queued",
+                            )
+                        )
+                        for qc in _queued.scalars().all():
+                            qc.status = "Paused"
+                            db.add(qc)
+                    else:
+                        campaign.status = "Replied"
+
+                    db.add(campaign)
+                    buyer_obj.last_reply_at = now
+                    db.add(buyer_obj)
+
+                    # 7. Send conversation engine reply
+                    if next_message and not conv_result["pass_detected"]:
+                        try:
+                            await send_email(
+                                to=buyer_obj.email,
+                                subject=f"Re: {reply.get('subject', '')}",
+                                body=next_message,
+                                send_type="reply",
+                            )
+                            logger.info(
+                                "Scheduler: conversation reply sent to buyer %s (stage: %s)",
+                                buyer_id, new_stage,
+                            )
+                        except Exception as send_err:
+                            logger.warning(
+                                "Scheduler: failed to send reply to buyer %s: %s",
+                                buyer_id, send_err,
+                            )
+
+                    # 8. Activity log
+                    db.add(ActivityLog(
+                        id=uuid.uuid4(),
+                        entity_type="campaign",
+                        entity_id=campaign.id,
+                        action="reply_received",
+                        metadata_json={
+                            "conversation_stage": new_stage,
+                            "from_email": from_email,
+                            "subject": reply.get("subject", ""),
+                            "buyer_id": str(buyer_id),
+                            "deal_id": str(campaign.deal_id),
+                            "contract_ready": conv_result["contract_ready"],
+                            "pass_detected": conv_result["pass_detected"],
+                            "gmail_message_id": gmail_message_id or "",
+                        },
+                    ))
+
+                    reply_intent = new_stage  # for backward compat
+
+
 
                     # Set match_confidence on fallback matches
                     if confidence_level == "fallback":
