@@ -3,14 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-async function apiFetch<T>(path: string): Promise<T> {
-  const r = await fetch(`${API}${path}`);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-  return r.json();
-}
+import { apiFetch } from "@/lib/api";
 
 interface Deal {
   id: string;
@@ -173,16 +166,14 @@ export default function DealDetailPage() {
   async function saveTitleCompany() {
     setTcSaving(true);
     try {
-      const r = await fetch(`${API}/api/title-companies`, {
+      const tc = await apiFetch<TitleCompany>("/api/title-companies", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...tcForm, deal_id: dealId }),
       });
-      if (r.ok) {
-        const tc = await r.json();
-        setTitleCompany(tc);
-        setShowTCForm(false);
-      }
+      setTitleCompany(tc);
+      setShowTCForm(false);
+    } catch (e) {
+      console.error("Failed to save title company:", e);
     } finally {
       setTcSaving(false);
     }
