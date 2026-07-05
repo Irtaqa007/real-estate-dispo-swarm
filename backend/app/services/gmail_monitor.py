@@ -77,6 +77,8 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
             from_addr = _extract_email(from_field)
 
             # Only process if from a known buyer
+            logger.info("IMAP: email from '%s' | buyer_set has %d emails | match: %s",
+                        from_addr, len(buyer_set), from_addr.lower() in buyer_set)
             if from_addr.lower() not in buyer_set:
                 continue
 
