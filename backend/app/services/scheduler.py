@@ -25,7 +25,7 @@ from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
 from app.services.groq_client import get_rate_limit_status
 from app.services.title_coordinator import process_title_emails, run_title_chases, send_assignment_contract
-from app.services.buyer_scoring import run_tier_promotions, reset_pitch_counters
+from app.services.buyer_scoring import run_tier_promotions, reset_pitch_counters, calculate_and_update_engagement
 from app.services.aging_monitor import run_aging_monitor
 from app.services.buyer_insights import update_all_buyer_insights
 from app.services.embeddings import generate_embedding
@@ -1902,6 +1902,8 @@ async def _scheduler_loop() -> None:
                 if is_new_day:
                     try:
                         async with _db.async_session_factory() as db:
+                            # Recalculate engagement scores before tier promotions
+                            await calculate_and_update_engagement(db)
                             promotions = await run_tier_promotions(db)
                             if promotions:
                                 logger.info(
