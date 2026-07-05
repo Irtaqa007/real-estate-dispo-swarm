@@ -505,6 +505,14 @@ async def generate_touch_email(
                     subject = subject.replace(_wf, _correct_full).replace(_wk, _correct_k)
             logger.debug("Post-process subject: corrected to buyer profit %s", _correct_k)
 
+        # Post-process: fix "us" framing — this is buyer's profit, not shared
+        body = body.replace("gives us a spread", "gives you a profit")
+        body = body.replace("gives us a", "gives you a")
+        body = body.replace("giving us a spread", "giving you a profit")
+        body = body.replace("giving us a", "giving you a")
+        body = body.replace("we have a spread", "you have a profit")
+        body = body.replace("our spread", "your profit")
+
         # Post-process: replace banned words with acceptable alternatives
         _BANNED_REPLACEMENTS = {
             "distressed": "value-add",
