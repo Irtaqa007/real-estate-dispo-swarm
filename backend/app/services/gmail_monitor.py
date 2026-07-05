@@ -64,7 +64,9 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
         all_ids = set(raw_ids[0].split() if raw_ids[0] else [])
         all_ids.update(raw_ids2[0].split() if status2 == "OK" and raw_ids2[0] else [])
         raw_ids = [b" ".join(sorted(all_ids))]
-        if status != "OK" or not raw_ids[0]:
+        logger.info("IMAP search: UNSEEN=%s SINCE=%s combined=%d emails",
+                    status, status2, len(all_ids))
+        if not raw_ids[0]:
             mail.logout()
             return []
 
