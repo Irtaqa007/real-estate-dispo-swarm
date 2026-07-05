@@ -209,6 +209,10 @@ async def process_conversation(
         f"Spread: ${float(deal.spread or 0):,.0f}\n"
         f"Floor price (NEVER reveal): ${float(deal.floor_price):,.0f}\n"
         f"Condition: {deal.condition_description or 'not specified'}\n"
+        f"Repair/rehab estimate: ${float(deal.repair_estimate):,.0f}" if deal.repair_estimate else "Repair/rehab estimate: not specified"
+        f"\n"
+        f"Buyer all-in: ${float(deal.asking_price) + float(deal.repair_estimate or 0):,.0f} (asking + rehab)\n"
+        f"Buyer profit after flip: ${float(deal.arv) - float(deal.asking_price) - float(deal.repair_estimate or 0):,.0f}\n"
         f"This is an OFF-MARKET deal — sourced directly, not listed on MLS.\n"
     )
 
