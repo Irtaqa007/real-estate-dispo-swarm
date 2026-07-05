@@ -509,10 +509,18 @@ async def generate_touch_email(
         body = body.replace("spread before rehab", "buyer profit after rehab")
         body = body.replace("spread before renovation", "buyer profit after rehab")
         body = body.replace("a spread of", "a buyer profit of")
+        body = body.replace("the spread is", "the buyer profit is")
+        body = body.replace("spread is $", "buyer profit is $")
         body = body.replace("spread of $", "buyer profit of $")
+        # Post-process: remove photo hallucinations
+        body = body.replace("Photos are attached.", "I can send photos if you want them.")
+        body = body.replace("Photos are attached,", "I can send photos.")
+        body = body.replace("photos are attached.", "I can send photos if you want them.")
         body = body.replace("Photos show ", "")
         body = body.replace("photos show ", "")
         body = body.replace("Photo shows ", "")
+        body = body.replace("See attached photos.", "")
+        body = body.replace("Attached photos.", "")
         body = body.replace("spread of $", "buyer profit of $")
 
         # Post-process: fix "us" framing — this is buyer's profit, not shared
