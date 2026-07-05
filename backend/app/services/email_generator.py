@@ -482,6 +482,17 @@ async def generate_touch_email(
         subject = parsed.get("subject", "").strip()
         body = parsed.get("body", "").strip()
 
+        # Post-process subject: replace wrong spread with correct buyer profit
+        if rehab_estimate and rehab_estimate > 0:
+            _correct = arv - asking_price - rehab_estimate
+            _wrong   = arv - asking_price
+            _wrong_k   = f"${int(_wrong)//1000:.0f}k"
+            _correct_k = f"${int(_correct)//1000:.0f}k"
+            _wrong_full   = f"${_wrong:,.0f}"
+            _correct_full = f"${_correct:,.0f}"
+            subject = subject.replace(_wrong_full, _correct_full).replace(_wrong_k, _correct_k)
+            logger.debug("Post-process subject: %s -> %s", _wrong_k, _correct_k)
+
         # Post-process: replace banned words with acceptable alternatives
         _BANNED_REPLACEMENTS = {
             "distressed": "value-add",
