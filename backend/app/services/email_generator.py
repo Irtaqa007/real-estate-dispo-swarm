@@ -561,26 +561,30 @@ async def generate_touch_email(
         body = _re.sub(r'\n\s*Best,\s*\nIrtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
         body = _re.sub(r'\n\s*Best,\s*Irtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
 
-        # Post-process: fix ALL wrong number variants with correct buyer profit
+        # Post-process: generic number correction
+        # Replace ANY dollar amount in body/subject that matches a wrong computed value
+        # with the correct buyer profit. Works for all deals regardless of numbers.
         if rehab_estimate and rehab_estimate > 0:
             correct = arv - asking_price - rehab_estimate
-            # All possible wrong values: ARV-asking, spread (asking-contract)
-            wrong_values = [
-                arv - asking_price,   # $55k gross margin
-                spread,               # $47k assignment fee
-            ]
             correct_full = f"${correct:,.0f}"
             correct_k    = f"${int(correct)//1000:.0f}k"
+            # Build list of all wrong values the AI might compute
+            wrong_values = set()
+            wrong_values.add(arv - asking_price)          # gross margin (no rehab)
+            wrong_values.add(spread)                       # assignment fee
+            wrong_values.add(asking_price - correct)      # some other variant
+            wrong_values.discard(correct)                  # never replace correct value
+            wrong_values.discard(0)
             for wrong in wrong_values:
-                if wrong > 0 and wrong != correct:
+                if wrong > 0:
                     w_full = f"${wrong:,.0f}"
                     w_k    = f"${int(wrong)//1000:.0f}k"
                     if w_full in body:
                         body = body.replace(w_full, correct_full)
-                        logger.info("Fixed number: %s -> %s", w_full, correct_full)
+                        logger.info("Fixed body number: %s -> %s", w_full, correct_full)
                     if w_k in body:
                         body = body.replace(w_k, correct_k)
-                        logger.info("Fixed number: %s -> %s", w_k, correct_k)
+                        logger.info("Fixed body number k-format: %s -> %s", w_k, correct_k)
 
         # Append unsubscribe footer (which also handles sign-off placement)
         if buyer_id is not None:
