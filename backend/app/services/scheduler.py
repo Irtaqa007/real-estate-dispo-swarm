@@ -555,6 +555,10 @@ async def process_buyer_replies() -> int:
                     db.add(buyer_obj)
 
                     # 7. Send conversation engine reply
+                    logger.info(
+                        "Scheduler: next_message preview: %s",
+                        (next_message or "")[:100]
+                    )
                     if next_message and not conv_result["pass_detected"]:
                         try:
                             await send_email(
