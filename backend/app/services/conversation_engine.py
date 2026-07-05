@@ -315,6 +315,13 @@ Return ONLY JSON:
                 new_stage = "collecting_info"
 
         if next_message:
+            # Never expose floor price — strip any mention
+            import re as _re
+            next_message = _re.sub(
+                r'(?:floor|minimum|lowest)[\s\w]*?\$[\d,]+',
+                'my number',
+                next_message, flags=_re.IGNORECASE
+            )
             sign_off = settings.operator_signature.strip()
             if sign_off and sign_off not in next_message:
                 next_message = next_message.rstrip() + "\n\n" + sign_off
