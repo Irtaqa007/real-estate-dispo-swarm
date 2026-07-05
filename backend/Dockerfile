@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 ARG HF_TOKEN=
 RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer('mixedbread-ai/mxbai-embed-large-v1', token=os.environ.get('HF_TOKEN') or None)"
 
+ARG BUST=0
 COPY . .
 
 RUN chmod +x /app/startup.sh
