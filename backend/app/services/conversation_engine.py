@@ -148,19 +148,22 @@ async def process_conversation(
     # AI sometimes misses when buyer provides everything in one message.
     _phone_in_reply = bool(re.search(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', reply_body))
     _title_in_reply = any(w in reply_lower for w in [
-        "title", "escrow", "closing", "first american", "stewart title",
-        "chicago title", "old republic", "republic title", "fidelity title",
+        "title", "escrow", "closing", "first american", "stewart",
+        "chicago title", "old republic", "republic title", "fidelity",
+        "title company", "title co", "closing attorney",
     ])
     _yes_in_reply = any(w in reply_lower for w in [
         "yes", "i'm in", "let's do", "let's go", "deal", "agreed",
         "sounds good", "move forward", "send the contract", "send contract",
-        "i want to", "ready to go", "i'll take it",
+        "i want to", "ready to go", "i'll take it", "works for me",
+        "let's proceed", "i'm ready", "lock it up", "let's lock",
     ])
     _name_in_reply = (
         "my name is" in reply_lower
         or "legal name is" in reply_lower
         or "name for contract" in reply_lower
         or "full name is" in reply_lower
+        or bool(re.search(r'(?:legal|full|contract)[\s:]+[A-Z][a-z]+ [A-Z][a-z]+', reply_body))
     )
     already_collected = _info_collected(campaign)
     if (
@@ -256,8 +259,10 @@ STAGE RULES:
 - Warm and interested -> stage="qualifying", ask ONE natural question
 - Buyer agrees to price and wants to proceed -> stage="collecting_info", collect missing info ONE AT A TIME
   (legal name first, then phone, then title company)
-- ALL info collected AND price confirmed -> stage="contract_ready"
+- ALL FOUR collected (yes + legal name with first+last + phone digits + title company) -> stage="contract_ready"
 - Counter offer -> stage="engaging", hold or negotiate (NEVER mark as pass)
+- CRITICAL: "Let's move forward", "send me everything", "I'm in", "very interested" WITHOUT providing
+  legal name + phone + title company = stage "engaging" or "qualifying", NEVER "contract_ready"
 
 EXTRACTION: Extract legal_name/phone/title_company/agreed_price ONLY if explicitly provided.
 

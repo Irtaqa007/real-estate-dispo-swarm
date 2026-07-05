@@ -123,8 +123,13 @@ def append_unsubscribe_footer(body: str, buyer_id: UUID) -> str:
     # Strip sign-off from end of body before inserting footer
     # so footer appears between body and sign-off
     body_stripped = body.rstrip()
-    if sign_off and body_stripped.endswith(sign_off):
-        body_without_signoff = body_stripped[:-len(sign_off)].rstrip()
+    # Robust sign-off detection — handles spacing variations
+    if sign_off and sign_off in body_stripped[-80:]:
+        idx = body_stripped.rfind(sign_off)
+        body_without_signoff = body_stripped[:idx].rstrip()
+    elif "Best," in body_stripped[-40:]:
+        idx = body_stripped.rfind("Best,")
+        body_without_signoff = body_stripped[:idx].rstrip()
     else:
         body_without_signoff = body_stripped
 

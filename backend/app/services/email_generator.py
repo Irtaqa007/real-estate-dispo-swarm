@@ -482,6 +482,29 @@ async def generate_touch_email(
         subject = parsed.get("subject", "").strip()
         body = parsed.get("body", "").strip()
 
+        # Post-process: replace banned words with acceptable alternatives
+        _BANNED_REPLACEMENTS = {
+            "distressed": "value-add",
+            "motivated seller": "seller",
+            "below market": "under ARV",
+            "as-is": "in current condition",
+            "guaranteed": "projected",
+            "no-brainer": "strong deal",
+            "steal": "strong value",
+            "act now": "worth a call",
+            "limited time": "available now",
+            "don't miss out": "worth considering",
+            "once in a lifetime": "rare find",
+        }
+        for _banned, _replacement in _BANNED_REPLACEMENTS.items():
+            if _banned.lower() in body.lower():
+                import re as _re2
+                body = _re2.sub(_re2.escape(_banned), _replacement, body, flags=_re2.IGNORECASE)
+
+        # Post-process: enforce off-market mention in Touch 1
+        if touch == 1 and "off-market" not in body.lower() and "off market" not in body.lower():
+            body = "This is an off-market deal — not listed anywhere. " + body
+
         # Post-process: strip any sign-off the AI included (it gets appended correctly later)
         import re as _re
         body = _re.sub(r'\n\s*Best,\s*\nIrtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
