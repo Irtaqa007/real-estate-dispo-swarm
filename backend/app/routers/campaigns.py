@@ -760,9 +760,14 @@ async def launch_campaign(
     )
     buyer_map = {b.id: b for b in buyer_records.scalars().all()}
 
-    # Build list of (match_result, buyer_object) tuples
+    # Build list of (match_result, buyer_object) tuples — deduplicated by buyer_id
     matched_pairs = []
+    seen_buyer_ids = set()
     for m in all_matched:
+        if m.id in seen_buyer_ids:
+            logger.debug("Deduplicating buyer %s from matched pairs", m.id)
+            continue
+        seen_buyer_ids.add(m.id)
         b = buyer_map.get(m.id)
         if b:
             matched_pairs.append((m, b))
