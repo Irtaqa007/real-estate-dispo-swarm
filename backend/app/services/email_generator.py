@@ -376,6 +376,8 @@ def _build_prompt(
         f"TOUCH 1 RULE: Must mention 'off-market' naturally in the body (not just subject).\n"
         f"Body must reference buyer's specific criteria.\n"
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
+        f"DO NOT mention photos, attachments, or documents unless photos field is explicitly provided.\n"
+        f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
         f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
     )
 
