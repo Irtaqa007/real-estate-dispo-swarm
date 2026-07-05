@@ -360,9 +360,18 @@ def _build_prompt(
         f"Condition: {condition_description}\n"
         f"\n"
         f"\n"
-        f"KEY NUMBERS (use exactly as stated):\n"
-        f"  Asking: ${asking_price:,.0f}\n"
-        + (f"  Rehab: ${rehab_estimate:,.0f}\n  All-in: ${asking_price+rehab_estimate:,.0f}\n  ARV: ${arv:,.0f}\n  Buyer profit: ${arv-asking_price-rehab_estimate:,.0f}\n" if rehab_estimate else f"  ARV: ${arv:,.0f}\n  Spread (before rehab): ${arv-asking_price:,.0f}\n")
+        f"KEY NUMBERS (copy exactly, do not compute anything yourself):\n"
+        f"  Asking price: ${asking_price:,.0f}\n"
+        + (
+            f"  Rehab estimate: ${rehab_estimate:,.0f}\n"
+            f"  Buyer all-in: ${asking_price + rehab_estimate:,.0f}\n"
+            f"  ARV: ${arv:,.0f}\n"
+            f"  BUYER PROFIT AFTER FLIP: ${arv - asking_price - rehab_estimate:,.0f} — always use this number\n"
+            if rehab_estimate else
+            f"  ARV: ${arv:,.0f}\n"
+            f"  Gross spread before rehab: ${arv - asking_price:,.0f}\n"
+            f"  Note: rehab unknown — mention buyer should factor rehab into their numbers\n"
+        )
         + f"\n"
         f"{intelligence_block}"
         f"PSYCHOLOGICAL ARC FOR TOUCH {touch}: {config['arc_description']}\n"
@@ -372,7 +381,7 @@ def _build_prompt(
         f"TONE: Professional, conversational, never desperate\n"
         f"TONE NOTE: {config.get('tone_note', '')}\n"
         f"CTA TYPE: {config['cta_type']}\n\n"
-        f"SUBJECT FORMAT: Use numbers — e.g. '3/2 San Antonio | $165k | $47k spread' or similar. 6-10 words.\n"
+        f"SUBJECT FORMAT: Use numbers — e.g. '3/2 {city} | ${asking_price//1000:.0f}k | ${int(arv-asking_price-(rehab_estimate or 0))//1000:.0f}k profit'. 6-10 words.\n"
         f"TOUCH 1 RULE: Must mention 'off-market' naturally in the body (not just subject).\n"
         f"Body must reference buyer's specific criteria.\n"
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
