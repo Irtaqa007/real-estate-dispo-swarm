@@ -56,8 +56,14 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
         mail.login(gmail_addr, gmail_pass)
         mail.select("INBOX")
 
-        # Search for unseen (unread) emails
+        # Search for unseen emails AND recent emails from last 7 days
+        # PEEK fetch ensures we don't auto-mark as read
         status, raw_ids = mail.search(None, "UNSEEN")
+        # Also check SEEN emails from last 2 days in case they got auto-marked
+        status2, raw_ids2 = mail.search(None, "SINCE", "2-Jul-2026")
+        all_ids = set(raw_ids[0].split() if raw_ids[0] else [])
+        all_ids.update(raw_ids2[0].split() if status2 == "OK" and raw_ids2[0] else [])
+        raw_ids = [b" ".join(sorted(all_ids))]
         if status != "OK" or not raw_ids[0]:
             mail.logout()
             return []
@@ -66,7 +72,7 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
         message_ids = raw_ids[0].split()
 
         for msg_id in message_ids:
-            status, msg_data = mail.fetch(msg_id, "(RFC822 FLAGS)")
+            status, msg_data = mail.fetch(msg_id, "(BODY.PEEK[] FLAGS)")
             if status != "OK":
                 continue
 
