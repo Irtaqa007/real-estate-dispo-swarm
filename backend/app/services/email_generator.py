@@ -505,6 +505,16 @@ async def generate_touch_email(
                     subject = subject.replace(_wf, _correct_full).replace(_wk, _correct_k)
             logger.debug("Post-process subject: corrected to buyer profit %s", _correct_k)
 
+        # Post-process: fix spread/profit framing
+        body = body.replace("spread before rehab", "buyer profit after rehab")
+        body = body.replace("spread before renovation", "buyer profit after rehab")
+        body = body.replace("a spread of", "a buyer profit of")
+        body = body.replace("spread of $", "buyer profit of $")
+        body = body.replace("Photos show ", "")
+        body = body.replace("photos show ", "")
+        body = body.replace("Photo shows ", "")
+        body = body.replace("spread of $", "buyer profit of $")
+
         # Post-process: fix "us" framing — this is buyer's profit, not shared
         body = body.replace("gives us a spread", "gives you a profit")
         body = body.replace("gives us a", "gives you a")
