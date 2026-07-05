@@ -482,16 +482,28 @@ async def generate_touch_email(
         subject = parsed.get("subject", "").strip()
         body = parsed.get("body", "").strip()
 
-        # Post-process subject: replace wrong spread with correct buyer profit
+        # Post-process subject: fix beds/baths hallucination
+        if beds and baths:
+            import re as _re_sub
+            subject = _re_sub.sub(
+                r'\b\d+/\d+\b',
+                f"{beds}/{int(baths)}",
+                subject
+            )
+
+        # Post-process subject: replace ALL wrong spread/profit variants with correct buyer profit
         if rehab_estimate and rehab_estimate > 0:
-            _correct = arv - asking_price - rehab_estimate
-            _wrong   = arv - asking_price
-            _wrong_k   = f"${int(_wrong)//1000:.0f}k"
-            _correct_k = f"${int(_correct)//1000:.0f}k"
-            _wrong_full   = f"${_wrong:,.0f}"
-            _correct_full = f"${_correct:,.0f}"
-            subject = subject.replace(_wrong_full, _correct_full).replace(_wrong_k, _correct_k)
-            logger.debug("Post-process subject: %s -> %s", _wrong_k, _correct_k)
+            _correct       = arv - asking_price - rehab_estimate
+            _wrong_gross   = arv - asking_price               # $55k (ARV-asking, no rehab)
+            _wrong_assign  = spread                           # $47k (assignment fee = asking - contract)
+            _correct_k     = f"${int(_correct)//1000:.0f}k"
+            _correct_full  = f"${_correct:,.0f}"
+            for _wrong in [_wrong_gross, _wrong_assign]:
+                if _wrong > 0 and _wrong != _correct:
+                    _wk = f"${int(_wrong)//1000:.0f}k"
+                    _wf = f"${_wrong:,.0f}"
+                    subject = subject.replace(_wf, _correct_full).replace(_wk, _correct_k)
+            logger.debug("Post-process subject: corrected to buyer profit %s", _correct_k)
 
         # Post-process: replace banned words with acceptable alternatives
         _BANNED_REPLACEMENTS = {
