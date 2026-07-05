@@ -561,17 +561,26 @@ async def generate_touch_email(
         body = _re.sub(r'\n\s*Best,\s*\nIrtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
         body = _re.sub(r'\n\s*Best,\s*Irtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
 
-        # Post-process: fix spread/profit numbers if AI computed wrong value
-        # The correct buyer profit is ARV - asking - rehab (if rehab known)
+        # Post-process: fix ALL wrong number variants with correct buyer profit
         if rehab_estimate and rehab_estimate > 0:
-            correct_buyer_profit = arv - asking_price - rehab_estimate
-            wrong_spread = arv - asking_price  # AI tends to compute this instead
-            # Replace wrong spread references with correct buyer profit
-            wrong_str = f"${wrong_spread:,.0f}"
-            correct_str = f"${correct_buyer_profit:,.0f}"
-            if wrong_str in body and wrong_str != correct_str:
-                body = body.replace(wrong_str, correct_str)
-                logger.info("Post-processed: replaced wrong spread %s with correct buyer profit %s", wrong_str, correct_str)
+            correct = arv - asking_price - rehab_estimate
+            # All possible wrong values: ARV-asking, spread (asking-contract)
+            wrong_values = [
+                arv - asking_price,   # $55k gross margin
+                spread,               # $47k assignment fee
+            ]
+            correct_full = f"${correct:,.0f}"
+            correct_k    = f"${int(correct)//1000:.0f}k"
+            for wrong in wrong_values:
+                if wrong > 0 and wrong != correct:
+                    w_full = f"${wrong:,.0f}"
+                    w_k    = f"${int(wrong)//1000:.0f}k"
+                    if w_full in body:
+                        body = body.replace(w_full, correct_full)
+                        logger.info("Fixed number: %s -> %s", w_full, correct_full)
+                    if w_k in body:
+                        body = body.replace(w_k, correct_k)
+                        logger.info("Fixed number: %s -> %s", w_k, correct_k)
 
         # Append unsubscribe footer (which also handles sign-off placement)
         if buyer_id is not None:
