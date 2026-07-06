@@ -21,6 +21,7 @@ Usage:
 import asyncio
 import collections
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -296,3 +297,46 @@ def get_rate_limit_status() -> dict:
         "minute_limit_remaining": max(0, MAX_REQUESTS_PER_MINUTE - len(_call_timestamps)),
         "daily_limit_remaining": max(0, MAX_REQUESTS_PER_DAY - get_call_count_today()),
     }
+
+
+def extract_json_block(text: str) -> str:
+    """Extract a clean JSON object from LLM output.
+
+    Handles reasoning models (qwen-qwq etc.) that emit <think>...</think>
+    blocks, markdown fences, and leading/trailing prose. Returns the first
+    balanced {...} block found, or the cleaned text if none found.
+    """
+    if not text:
+        return text
+    # Strip reasoning blocks
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)  # unclosed think
+    # Strip markdown fences
+    text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
+    # Find first balanced JSON object
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return text[start:]

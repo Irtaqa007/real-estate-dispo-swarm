@@ -11,7 +11,7 @@ import email
 import imaplib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
@@ -52,7 +52,8 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
     # Build a retry-wrapped version of the sync IMAP fetch
     def _fetch_replies() -> List[dict]:
         """Connect to IMAP and fetch replies (runs in thread pool)."""
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        # 30s socket timeout — prevents silent multi-minute hangs inside the scheduler
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=30)
         mail.login(gmail_addr, gmail_pass)
         mail.select("INBOX")
 
@@ -60,7 +61,8 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
         # PEEK fetch ensures we don't auto-mark as read
         status, raw_ids = mail.search(None, "UNSEEN")
         # Also check SEEN emails from last 2 days in case they got auto-marked
-        status2, raw_ids2 = mail.search(None, "SINCE", "2-Jul-2026")
+        _since = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%d-%b-%Y")
+        status2, raw_ids2 = mail.search(None, "SINCE", _since)
         all_ids = set(raw_ids[0].split() if raw_ids[0] else [])
         all_ids.update(raw_ids2[0].split() if status2 == "OK" and raw_ids2[0] else [])
         raw_ids = [b" ".join(sorted(all_ids))]

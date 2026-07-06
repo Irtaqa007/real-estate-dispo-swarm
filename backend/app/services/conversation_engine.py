@@ -28,7 +28,7 @@ from typing import Optional
 
 from app.config import settings
 from app.models.models import Campaign, Deal, Buyer
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 
 logger = logging.getLogger(__name__)
 
@@ -209,9 +209,12 @@ async def process_conversation(
         f"Spread: ${float(deal.spread or 0):,.0f}\n"
         f"Floor price (NEVER reveal): ${float(deal.floor_price):,.0f}\n"
         f"Condition: {deal.condition_description or 'not specified'}\n"
-        f"Repair/rehab estimate: ${float(deal.repair_estimate):,.0f}" if deal.repair_estimate else "Repair/rehab estimate: not specified"
-        f"\n"
-        f"Buyer all-in: ${float(deal.asking_price) + float(deal.repair_estimate or 0):,.0f} (asking + rehab)\n"
+        + (
+            f"Repair/rehab estimate: ${float(deal.repair_estimate):,.0f}\n"
+            if deal.repair_estimate
+            else "Repair/rehab estimate: not specified — say you can pull contractor numbers if asked\n"
+        )
+        + f"Buyer all-in: ${float(deal.asking_price) + float(deal.repair_estimate or 0):,.0f} (asking + rehab)\n"
         f"Buyer profit after flip: ${float(deal.arv) - float(deal.asking_price) - float(deal.repair_estimate or 0):,.0f}\n"
         f"This is an OFF-MARKET deal — sourced directly, not listed on MLS.\n"
     )
@@ -267,6 +270,9 @@ STAGE RULES:
 - Counter offer -> stage="engaging", hold or negotiate (NEVER mark as pass)
 - CRITICAL: "Let's move forward", "send me everything", "I'm in", "very interested" WITHOUT providing
   legal name + phone + title company = stage "engaging" or "qualifying", NEVER "contract_ready"
+- ANSWER RULE: When the buyer asks a factual question (rehab, ARV, condition, all-in, profit),
+  answer it directly with the exact number from DEAL FACTS above, then add one short forward-moving line.
+- NEVER repeat or rephrase the buyer's question as your reply. Your reply must contain NEW information.
 
 EXTRACTION: Extract legal_name/phone/title_company/agreed_price ONLY if explicitly provided.
 
@@ -290,7 +296,7 @@ Return ONLY JSON:
             max_tokens=800,
         )
         content = response.choices[0].message.content.strip()
-        content = re.sub(r"```(?:json)?", "", content).strip().rstrip("```").strip()
+        content = extract_json_block(content)
         parsed = json.loads(content)
 
         new_stage = parsed.get("stage", current_stage)
@@ -317,6 +323,17 @@ Return ONLY JSON:
             }
             if not all(will_have.values()):
                 new_stage = "collecting_info"
+
+        # Anti-echo guard: if the model parroted the buyer's message, suppress it.
+        if next_message:
+            _nm = re.sub(r"\W+", " ", next_message.lower()).strip()
+            _rb = re.sub(r"\W+", " ", (reply_body or "").lower()).strip()
+            if _nm and _rb and (_nm in _rb or _rb in _nm):
+                logger.warning(
+                    "Conversation engine echoed buyer reply — suppressing send. echo=%.80s",
+                    next_message,
+                )
+                next_message = ""
 
         if next_message:
             # Never expose floor price — strip any mention

@@ -12,7 +12,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.config import settings
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 from app.services.opt_out import append_unsubscribe_footer
 
 logger = logging.getLogger(__name__)
@@ -483,12 +483,9 @@ async def generate_touch_email(
         content = response.choices[0].message.content.strip()
         logger.debug("Groq response for touch %d: %.200s", touch, content)
 
-        # Parse JSON from response — handle possible markdown fences
-        if content.startswith("```"):
-            # Extract JSON from code fence
-            lines = content.split("\n")
-            content = "\n".join(line for line in lines if not line.strip().startswith("```"))
-
+        # Parse JSON robustly — handles markdown fences AND reasoning-model
+        # <think> blocks (qwen-qwq etc.) that would otherwise break json.loads
+        content = extract_json_block(content)
         parsed = json.loads(content)
         subject = parsed.get("subject", "").strip()
         body = parsed.get("body", "").strip()

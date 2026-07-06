@@ -1,4 +1,16 @@
 import logging
+
+# Configure logging FIRST — without this, root logger defaults to WARNING
+# and every logger.info() in the app is silently dropped (invisible debugging).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    force=True,
+)
+# Keep noisy libraries quieter
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError, ResponseValidationError
