@@ -53,8 +53,10 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
     def _fetch_replies() -> List[dict]:
         """Connect to IMAP and fetch replies (runs in thread pool)."""
         # 30s socket timeout — prevents silent multi-minute hangs inside the scheduler
+        logger.info("IMAP: connecting to imap.gmail.com as %s ...", gmail_addr)
         mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=30)
         mail.login(gmail_addr, gmail_pass)
+        logger.info("IMAP: login OK, selecting INBOX")
         mail.select("INBOX")
 
         # Search for unseen emails AND recent emails from last 7 days
