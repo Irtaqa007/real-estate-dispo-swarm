@@ -146,7 +146,7 @@ async def process_conversation(
 
     # ── Pre-check 3: Force contract_ready if all 4 pieces present in reply ───
     # AI sometimes misses when buyer provides everything in one message.
-    _phone_in_reply = bool(re.search(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', reply_body))
+    _phone_in_reply = bool(re.search(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', reply_body)) or bool(re.search(r'\b\d{9,15}\b', reply_body))
     _title_in_reply = any(w in reply_lower for w in [
         "title", "escrow", "closing", "first american", "stewart",
         "chicago title", "old republic", "republic title", "fidelity",
