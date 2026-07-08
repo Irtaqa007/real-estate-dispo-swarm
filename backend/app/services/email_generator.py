@@ -217,7 +217,7 @@ def _build_prompt(
 
     # Property summary
     if property_type == "House" and beds and baths:
-        property_summary = f"{beds}bed/{baths}bath {sqft or ''}sqft".strip()
+        property_summary = f"{beds}bed/{int(baths) if baths and baths == int(baths) else baths}bath {sqft or ''}sqft".strip()
     elif property_type == "Land":
         property_summary = "land"
     else:
