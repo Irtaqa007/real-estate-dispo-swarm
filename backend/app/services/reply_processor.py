@@ -1020,7 +1020,7 @@ async def match_reply_to_campaign(
         select(Campaign)
         .where(
             Campaign.buyer_id == buyer_id,
-            Campaign.status.in_(["Sent", "Replied"]),
+            Campaign.status.in_(["Sent", "Replied", "Failed"]),
         )
         .order_by(Campaign.sent_at.desc().nullslast())
     )
