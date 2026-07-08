@@ -530,6 +530,20 @@ async def generate_touch_email(
             body = body.replace("before rehab", "after rehab")
             body = body.replace("gross profit", "buyer profit")
 
+        # Post-process: enforce rehab mention when available
+        if rehab_estimate and rehab_estimate > 0:
+            if f"${int(rehab_estimate):,}" not in body and f"${int(rehab_estimate)//1000:.0f}k" not in body.lower() and "28" not in body:
+                # Insert rehab naturally before the CTA
+                body = body.rstrip()
+                if "worth a look" in body.lower():
+                    body = body.replace(
+                        "Worth a look?", f"Rehab is estimated at ${int(rehab_estimate):,}. Worth a look?"
+                    ).replace(
+                        "worth a look?", f"Rehab is estimated at ${int(rehab_estimate):,}. Worth a look?"
+                    )
+                else:
+                    body = body + f" Rehab estimate is ${int(rehab_estimate):,}."
+
         # Post-process: fix spread/profit framing
         body = body.replace("spread before rehab", "buyer profit after rehab")
         body = body.replace("spread before renovation", "buyer profit after rehab")
