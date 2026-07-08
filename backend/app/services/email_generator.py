@@ -393,9 +393,10 @@ def _build_prompt(
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
         f"DO NOT mention photos, attachments, or documents unless photos field is explicitly provided.\n"
         + (
-            f"ALWAYS state the rehab estimate in the body. Profit is AFTER rehab — never say 'before rehab'.\n"
+            f"NUMBERS TO USE: ${rehab_estimate:,.0f} rehab, ${arv - asking_price - rehab_estimate:,.0f} buyer profit AFTER rehab, ${asking_price + rehab_estimate:,.0f} all-in.\n"
+            f"Include ALL THREE numbers in the body naturally. Never say 'before rehab'. Never omit rehab cost.\n"
             if rehab_estimate else
-            f"Rehab cost is UNKNOWN: do NOT state any profit or spread number — just asking, ARV, condition; tell the buyer to run their own rehab numbers.\n"
+            f"Rehab cost UNKNOWN — do NOT state any profit number. Just mention asking, ARV, condition. Tell buyer to factor in their own rehab costs.\n"
         )
         + f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
         f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
