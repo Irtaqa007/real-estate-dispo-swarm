@@ -929,8 +929,22 @@ async def launch_campaign(
     deal.status = "Campaign Launched"
     db.add(deal)
 
-    # Commit everything
-    await db.commit()
+    # Commit everything — catch race condition duplicate inserts gracefully
+    try:
+        await db.commit()
+    except Exception as commit_err:
+        if "uq_campaigns_buyer_deal_touch" in str(commit_err) or "UniqueViolation" in str(commit_err):
+            await db.rollback()
+            logger.warning("Campaign launch race condition detected for deal %s — campaigns already exist", deal_id)
+            return CampaignLaunchResponse(
+                deal_id=deal_id,
+                deal_address=deal.address,
+                total_buyers=0,
+                total_campaigns_created=0,
+                results=[],
+                status="already_launched",
+            )
+        raise
 
     logger.info(
         "Campaign launched for deal %s: %d buyers, %d total touches",
