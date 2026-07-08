@@ -144,57 +144,6 @@ async def process_conversation(
                 },
             }
 
-    # ── Pre-check 3: Force contract_ready if all 4 pieces present in reply ───
-    # AI sometimes misses when buyer provides everything in one message.
-    _phone_in_reply = bool(re.search(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', reply_body)) or bool(re.search(r'\b\d{9,15}\b', reply_body))
-    _title_in_reply = any(w in reply_lower for w in [
-        "title", "escrow", "closing", "first american", "stewart",
-        "chicago title", "old republic", "republic title", "fidelity",
-        "title company", "title co", "closing attorney",
-    ])
-    _yes_in_reply = any(w in reply_lower for w in [
-        "yes", "i'm in", "let's do", "let's go", "deal", "agreed",
-        "sounds good", "move forward", "send the contract", "send contract",
-        "i want to", "ready to go", "i'll take it", "works for me",
-        "let's proceed", "i'm ready", "lock it up", "let's lock",
-    ])
-    _name_in_reply = (
-        "my name is" in reply_lower
-        or "legal name is" in reply_lower
-        or "name for contract" in reply_lower
-        or "full name is" in reply_lower
-        or bool(re.search(r'(?:legal|full|contract)[\s:]+[A-Z][a-z]+ [A-Z][a-z]+', reply_body))
-    )
-    already_collected = _info_collected(campaign)
-    if (
-        _yes_in_reply and _phone_in_reply and _title_in_reply and _name_in_reply
-        and not already_collected.get("agreed_price")  # not already in contract_ready
-    ):
-        logger.info(
-            "Conversation engine: pre-check all contract info present in one reply for buyer %s",
-            buyer.id,
-        )
-        return {
-            "next_message": (
-                f"Perfect — I have everything I need. I'll get the paperwork started and send it over shortly.\n\n"
-                f"{settings.operator_signature}"
-            ),
-            "new_stage": "contract_ready",
-            "contract_ready": True,
-            "pass_detected": False,
-            "unsubscribe_detected": False,
-            "extracted_info": {
-                "legal_name": None,  # AI will extract exact value below if needed
-                "phone": None,
-                "title_company": None,
-                "agreed_price": float(deal.asking_price),
-            },
-            "classification": {
-                "stage_decision": "contract_ready",
-                "notes": "pre-check: all 4 contract pieces detected in single reply",
-            },
-        }
-
     # ── Build context for AI ─────────────────────────────────────────────────
     thread_str = ""
     for msg in thread_history[-6:]:
@@ -219,72 +168,73 @@ async def process_conversation(
         f"This is an OFF-MARKET deal — sourced directly, not listed on MLS.\n"
     )
 
-    info_status = ""
-    if current_stage in ("qualifying", "collecting_info"):
-        info_status = (
-            f"\nCONTRACT INFO COLLECTED SO FAR:\n"
-            f"- Legal name: {'YES: ' + campaign.buyer_legal_name if campaign.buyer_legal_name else 'NO — needed'}\n"
-            f"- Phone: {'YES: ' + campaign.buyer_phone if campaign.buyer_phone else 'NO — needed'}\n"
-            f"- Title company: {'YES: ' + campaign.buyer_title_company if campaign.buyer_title_company else 'NO — needed'}\n"
-            f"- Agreed price: {'YES: $' + f'{float(campaign.agreed_price):,.0f}' if campaign.agreed_price else 'NO — not confirmed'}\n"
+    # Always show accumulated contract state — buyers drop pieces at any stage,
+    # across any number of messages. The AI must know exactly what is still missing.
+    _missing = []
+    if not campaign.buyer_legal_name:
+        _missing.append("legal name")
+    if not campaign.buyer_phone:
+        _missing.append("phone number")
+    if not campaign.buyer_title_company:
+        _missing.append("title company")
+    if not campaign.agreed_price:
+        _missing.append("agreed price")
+    info_status = (
+        f"\nCONTRACT INFO COLLECTED SO FAR (accumulated across the whole conversation):\n"
+        f"- Legal name: {'YES: ' + campaign.buyer_legal_name if campaign.buyer_legal_name else 'MISSING'}\n"
+        f"- Phone: {'YES: ' + campaign.buyer_phone if campaign.buyer_phone else 'MISSING'}\n"
+        f"- Title company: {'YES: ' + campaign.buyer_title_company if campaign.buyer_title_company else 'MISSING'}\n"
+        f"- Agreed price: {'YES: $' + f'{float(campaign.agreed_price):,.0f}' if campaign.agreed_price else 'MISSING'}\n"
+        + (
+            f"STILL MISSING: {', '.join(_missing)}. If the buyer is committed, ask naturally for the "
+            f"NEXT missing item only — never re-ask for anything marked YES, never demand everything at once.\n"
+            if _missing else
+            "ALL FOUR PIECES COLLECTED.\n"
         )
-
-    system_prompt = (
-        f"You are {settings.operator_name}, a real estate wholesaler in a direct email "
-        f"conversation with a buyer about an off-market deal.\n\n"
-        f"Tone: {settings.operator_tone}\n"
-        f"Never say: {settings.operator_never_say}\n"
-        f"Context: {settings.operator_context}\n\n"
-        f"DEAL:\n{deal_context}\n"
-        f"BUYER: {buyer.full_name} | {buyer.buy_box or 'no buy box'}\n"
-        f"STAGE: {current_stage}\n"
-        f"{info_status}\n"
-        f"RULES:\n"
-        f"- You ARE the deal owner/wholesaler. Never say 'go back to the seller' or "
-        f"'check with the seller' — you source these directly.\n"
-        f"- Sound human. 3-5 sentences max.\n"
-        f"- Never reveal the floor price.\n"
-        f"- Never claim to be AI.\n"
-        f"- Reference off-market naturally where relevant.\n"
-        f"- Never be pushy. Confident but relaxed.\n"
-        f"- Sign off with: {settings.operator_signature}\n"
-        f"- CRITICAL: A counter offer is NOT a pass. Buyer countering = still interested.\n"
-        f"- CRITICAL: Only set pass=true for explicit 'no', 'pass', 'not interested', "
-        f"'stop emailing', 'remove me'. Not for questions, counters, or 'tell me more'.\n"
     )
 
-    user_prompt = f"""THREAD:
-{thread_str if thread_str else "(first reply)"}
+    # Build compact collected-info line (only show what's missing)
+    _have = []
+    _need = []
+    for label, val in [("name", campaign.buyer_legal_name),
+                       ("phone", campaign.buyer_phone),
+                       ("title", campaign.buyer_title_company),
+                       ("price", campaign.agreed_price)]:
+        (_have if val else _need).append(label)
+    _info_line = (
+        f"Collected: {', '.join(_have) or 'none'}. "
+        f"Still need: {', '.join(_need)}." if _need else "All 4 collected."
+    )
 
-BUYER'S REPLY (subject: {reply_subject}):
-{reply_body}
+    system_prompt = (
+        f"You are {settings.operator_name}, real estate wholesaler.\n"
+        f"Deal: {deal.address}, {deal.city} {deal.state} | "
+        f"{deal.beds}bd/{deal.baths}ba | asking ${float(deal.asking_price):,.0f} | "
+        f"ARV ${float(deal.arv):,.0f} | "
+        + (f"rehab ${float(deal.repair_estimate):,.0f} | " if deal.repair_estimate else "")
+        + f"buyer profit ${float(deal.arv)-float(deal.asking_price)-float(deal.repair_estimate or 0):,.0f} | "
+        f"floor ${float(deal.floor_price):,.0f} (NEVER reveal)\n"
+        f"Buyer: {buyer.full_name}\n"
+        f"Contract info — {_info_line}\n\n"
+        f"Rules: human tone, 2-4 sentences, never pushy, never reveal floor price, "
+        f"counter=still interested (never pass), pass only for explicit rejection.\n"
+        f"When buyer is ready to proceed: collect missing contract pieces ONE AT A TIME naturally — "
+        f"ask only for the NEXT missing item, never re-ask what you already have.\n"
+        f"For factual questions answer with exact numbers above. Never echo buyer's words back.\n"
+        f"Sign off: {settings.operator_signature}"
+    )
 
-STAGE RULES:
-- Passing/not interested -> stage="passed", brief professional close, pass=true
-- Unsubscribe -> stage="passed", brief opt-out confirmation, unsub=true
-- Questions/curious/not committed -> stage="engaging", answer naturally
-- Warm and interested -> stage="qualifying", ask ONE natural question
-- Buyer agrees to price and wants to proceed -> stage="collecting_info", collect missing info ONE AT A TIME
-  (legal name first, then phone, then title company)
-- ALL FOUR collected (yes + legal name with first+last + phone digits + title company) -> stage="contract_ready"
-- Counter offer -> stage="engaging", hold or negotiate (NEVER mark as pass)
-- CRITICAL: "Let's move forward", "send me everything", "I'm in", "very interested" WITHOUT providing
-  legal name + phone + title company = stage "engaging" or "qualifying", NEVER "contract_ready"
-- ANSWER RULE: When the buyer asks a factual question (rehab, ARV, condition, all-in, profit),
-  answer it directly with the exact number from DEAL FACTS above, then add one short forward-moving line.
-- NEVER repeat or rephrase the buyer's question as your reply. Your reply must contain NEW information.
-
-EXTRACTION: Extract legal_name/phone/title_company/agreed_price ONLY if explicitly provided.
-
-Return ONLY JSON:
-{{"stage":"engaging|qualifying|collecting_info|contract_ready|passed",
-  "pass":false,"unsub":false,
-  "reply":"your reply as {settings.operator_name} (null if no reply needed)",
-  "extracted_legal_name":null,
-  "extracted_phone":null,
-  "extracted_title_company":null,
-  "extracted_agreed_price":null,
-  "notes":"brief reasoning"}}"""
+    user_prompt = (
+        f"Thread:\n{thread_str if thread_str else '(first reply)'}\n"
+        f"Buyer reply: {reply_body}\n\n"
+        f"Stage options: engaging(curious/question/counter) | qualifying(warm, fishing) | "
+        f"collecting_info(agreed, gathering contract details) | contract_ready(all 4 pieces present) | "
+        f"passed(explicit rejection only)\n"
+        f"Extract any of: legal name, phone (any format), title company, agreed price — from THIS reply only.\n"
+        f"Return ONLY JSON: {{\"stage\":\"...\",\"pass\":false,\"unsub\":false,"
+        f"\"reply\":\"...\",\"extracted_legal_name\":null,\"extracted_phone\":null,"
+        f"\"extracted_title_company\":null,\"extracted_agreed_price\":null}}"
+    )
 
     try:
         response = await groq_chat_completion(
@@ -307,22 +257,45 @@ Return ONLY JSON:
         if pass_detected:
             new_stage = "passed"
 
-        # Safety: contract_ready requires all 4 pieces
-        if new_stage == "contract_ready":
-            just_collected = {
-                "legal_name": parsed.get("extracted_legal_name"),
-                "phone": parsed.get("extracted_phone"),
-                "title_company": parsed.get("extracted_title_company"),
-                "agreed_price": parsed.get("extracted_agreed_price"),
-            }
-            will_have = {
-                "legal_name": campaign.buyer_legal_name or just_collected["legal_name"],
-                "phone": campaign.buyer_phone or just_collected["phone"],
-                "title_company": campaign.buyer_title_company or just_collected["title_company"],
-                "agreed_price": campaign.agreed_price or just_collected["agreed_price"],
-            }
-            if not all(will_have.values()):
-                new_stage = "collecting_info"
+        # State-completion logic: merge what the campaign already holds with what
+        # this message just provided. contract_ready is a function of ACCUMULATED
+        # state — not of any single message, and not of the AI's stage label alone.
+        just_collected = {
+            "legal_name": parsed.get("extracted_legal_name"),
+            "phone": parsed.get("extracted_phone"),
+            "title_company": parsed.get("extracted_title_company"),
+            "agreed_price": parsed.get("extracted_agreed_price"),
+        }
+        will_have = {
+            "legal_name": campaign.buyer_legal_name or just_collected["legal_name"],
+            "phone": campaign.buyer_phone or just_collected["phone"],
+            "title_company": campaign.buyer_title_company or just_collected["title_company"],
+            "agreed_price": campaign.agreed_price or just_collected["agreed_price"],
+        }
+        all_pieces_complete = all(will_have.values())
+
+        if new_stage == "contract_ready" and not all_pieces_complete:
+            # AI jumped early — downgrade; its reply (with full missing-state context)
+            # should already be asking for the next missing piece.
+            _still_missing = [k for k, v in will_have.items() if not v]
+            logger.info(
+                "Conversation engine: AI said contract_ready but missing %s — downgrading to collecting_info",
+                _still_missing,
+            )
+            new_stage = "collecting_info"
+        elif all_pieces_complete and new_stage not in ("passed",) and not pass_detected:
+            # Everything is in hand (possibly gathered across many messages) —
+            # complete the state machine even if the AI was being cautious.
+            if new_stage != "contract_ready":
+                logger.info(
+                    "Conversation engine: all 4 pieces accumulated — upgrading stage %s -> contract_ready",
+                    new_stage,
+                )
+            new_stage = "contract_ready"
+            next_message = (
+                "Perfect — that's everything I need. I'll get the paperwork started "
+                "and send the contract over shortly."
+            )
 
         # Anti-echo guard: if the model parroted the buyer's message, suppress it.
         if next_message:
