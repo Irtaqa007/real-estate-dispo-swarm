@@ -224,6 +224,8 @@ def _build_prompt(
         property_summary = property_type
 
     # ── FEATURE 4: Buyer Intelligence section ──
+    # IMPORTANT: These lines are INTERNAL CONTEXT for tone/angle only.
+    # They must NEVER appear verbatim in the email body.
     intelligence_lines = []
     if deals_closed > 0:
         intelligence_lines.append(
@@ -308,7 +310,7 @@ def _build_prompt(
         )
 
     intelligence_block = (
-        "\nBUYER INTELLIGENCE (use to personalize the email):\n"
+        "\nBUYER INTELLIGENCE (internal context ONLY — adjust tone/angle, NEVER quote in email body):\n"
         + "\n".join(f"- {line}" for line in intelligence_lines)
         + "\n"
     ) if intelligence_lines else ""
