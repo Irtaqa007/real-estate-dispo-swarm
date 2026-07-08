@@ -343,6 +343,10 @@ def _build_prompt(
         f"- Never sound like a bulk email. Sound like one person writing to one person.\n"
         f"- Reference the buyer's specific buy box criteria — not generically\n"
         f"- Let numbers sell. Keep adjectives minimal.\n"
+        f"- Write a COHESIVE pitch — not a bullet list of facts. Weave address, numbers, \n"
+        f"  condition, and rehab into flowing sentences that tell one story.\n"
+        f"- Mention rehab cost ONCE, integrated naturally (e.g. '$28k rehab, so you clear $35k').\n"
+        f"- Baths: always write as integer if whole number (2 not 2.0).\n"
         f"- Do not reveal you are AI or automated under any circumstances\n"
         f"- Return ONLY valid JSON: {{\"subject\": \"...\", \"body\": \"...\"}}\n"
         f"- No markdown, no code fences, no explanation outside the JSON"
@@ -523,10 +527,7 @@ async def generate_touch_email(
         # Post-process: rehab framing — profit is always AFTER rehab
         if rehab_estimate and rehab_estimate > 0:
             body = body.replace("before rehab", "after rehab")
-            if "rehab" not in body.lower():
-                body = body.rstrip() + (
-                    f" Rehab estimate is ${rehab_estimate:,.0f} — that profit number already accounts for it."
-                )
+            body = body.replace("gross profit", "buyer profit")
 
         # Post-process: fix spread/profit framing
         body = body.replace("spread before rehab", "buyer profit after rehab")
