@@ -247,7 +247,23 @@ async def process_conversation(
         )
         content = response.choices[0].message.content.strip()
         content = extract_json_block(content)
-        parsed = json.loads(content)
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            # One strict retry — reasoning models occasionally wrap output in prose.
+            logger.warning(
+                "Conversation engine: JSON parse failed, retrying strict. raw=%.200s", content
+            )
+            retry = await groq_chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt + "\n\nOutput RAW JSON only. No prose, no markdown."},
+                ],
+                temperature=0.2,
+                max_tokens=800,
+            )
+            content = extract_json_block(retry.choices[0].message.content.strip())
+            parsed = json.loads(content)
 
         new_stage = parsed.get("stage", current_stage)
         next_message = parsed.get("reply") or ""
@@ -327,6 +343,17 @@ async def process_conversation(
             parsed.get("notes", "")[:80],
         )
 
+        logger.info(
+            "Conversation engine: %s -> %s | extracted=%s | reply=%s",
+            current_stage, new_stage,
+            [k for k, v in {
+                "name": parsed.get("extracted_legal_name"),
+                "phone": parsed.get("extracted_phone"),
+                "title": parsed.get("extracted_title_company"),
+                "price": parsed.get("extracted_agreed_price"),
+            }.items() if v] or "none",
+            "yes" if next_message else "no",
+        )
         return {
             "next_message": next_message if next_message else None,
             "new_stage": new_stage,

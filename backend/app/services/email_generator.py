@@ -386,7 +386,12 @@ def _build_prompt(
         f"Body must reference buyer's specific criteria.\n"
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
         f"DO NOT mention photos, attachments, or documents unless photos field is explicitly provided.\n"
-        f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
+        + (
+            f"ALWAYS state the rehab estimate in the body. Profit is AFTER rehab — never say 'before rehab'.\n"
+            if rehab_estimate else
+            f"Rehab cost is UNKNOWN: do NOT state any profit or spread number — just asking, ARV, condition; tell the buyer to run their own rehab numbers.\n"
+        )
+        + f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
         f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
     )
 
@@ -512,6 +517,14 @@ async def generate_touch_email(
                     _wf = f"${_wrong:,.0f}"
                     subject = subject.replace(_wf, _correct_full).replace(_wk, _correct_k)
             logger.debug("Post-process subject: corrected to buyer profit %s", _correct_k)
+
+        # Post-process: rehab framing — profit is always AFTER rehab
+        if rehab_estimate and rehab_estimate > 0:
+            body = body.replace("before rehab", "after rehab")
+            if "rehab" not in body.lower():
+                body = body.rstrip() + (
+                    f" Rehab estimate is ${rehab_estimate:,.0f} — that profit number already accounts for it."
+                )
 
         # Post-process: fix spread/profit framing
         body = body.replace("spread before rehab", "buyer profit after rehab")
