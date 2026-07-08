@@ -290,15 +290,30 @@ async def process_conversation(
         }
         all_pieces_complete = all(will_have.values())
 
+        _still_missing = [k for k, v in will_have.items() if not v]
+        _pieces_have = [k for k, v in will_have.items() if v]
+
         if new_stage == "contract_ready" and not all_pieces_complete:
-            # AI jumped early — downgrade; its reply (with full missing-state context)
-            # should already be asking for the next missing piece.
-            _still_missing = [k for k, v in will_have.items() if not v]
+            # AI jumped early — downgrade
             logger.info(
                 "Conversation engine: AI said contract_ready but missing %s — downgrading to collecting_info",
                 _still_missing,
             )
             new_stage = "collecting_info"
+        elif not all_pieces_complete and _pieces_have and new_stage not in ("passed", "collecting_info"):
+            # Some pieces collected but AI didn't recognise we're mid-collection.
+            # Force collecting_info so the AI asks for the next missing piece.
+            logger.info(
+                "Conversation engine: have %s, missing %s — forcing collecting_info from %s",
+                _pieces_have, _still_missing, new_stage,
+            )
+            new_stage = "collecting_info"
+            # Ask for the single next missing piece naturally
+            _ask_for = _still_missing[0].replace("_", " ")
+            next_message = (
+                f"Got it. One more thing — could you share your {_ask_for}?"
+                f"\n\n{settings.operator_signature}"
+            )
         elif all_pieces_complete and new_stage not in ("passed",) and not pass_detected:
             # Everything is in hand (possibly gathered across many messages) —
             # complete the state machine even if the AI was being cautious.
