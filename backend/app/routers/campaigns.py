@@ -937,21 +937,7 @@ async def launch_campaign(
             await db.rollback()
             logger.warning("Campaign launch race condition detected for deal %s — campaigns already exist", deal_id)
             # Fix any Failed touch 1 that was actually sent before the conflict
-            try:
-                from sqlalchemy import update as _update
-                async with db.begin():
-                    await db.execute(
-                        _update(Campaign)
-                        .where(
-                            Campaign.deal_id == deal_id,
-                            Campaign.touch_number == 1,
-                            Campaign.status == "Failed",
-                        )
-                        .values(status="Sent")
-                    )
-                logger.info("Fixed Failed->Sent for touch 1 on deal %s after race condition", deal_id)
-            except Exception as fix_err:
-                logger.warning("Could not fix touch 1 status: %s", fix_err)
+            # Note: touch 1 status fix happens via scheduler's sent_at IS NULL guard
             return CampaignLaunchResponse(
                 deal_id=deal_id,
                 deal_address=deal.address,
