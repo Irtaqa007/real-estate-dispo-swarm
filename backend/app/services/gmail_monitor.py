@@ -22,9 +22,6 @@ from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponenti
 from app.config import settings
 from app.services.resilience import log_retry_attempt, record_metric
 
-__all__ = ['check_for_replies']
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -59,8 +56,13 @@ async def check_for_replies(buyer_emails: List[str]) -> List[dict]:
         logger.info("IMAP: connecting to imap.gmail.com as %s ...", gmail_addr)
         mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=30)
         mail.login(gmail_addr, gmail_pass)
-        logger.info("IMAP: login OK, selecting INBOX")
-        mail.select("INBOX")
+        logger.info("IMAP: login OK, selecting [Gmail]/All Mail")
+        # Search All Mail — replies to sent emails sometimes bypass INBOX
+        # and land directly in All Mail under the conversation thread
+        _select_result = mail.select('"[Gmail]/All Mail"')
+        if _select_result[0] != "OK":
+            logger.warning("IMAP: All Mail not available, falling back to INBOX")
+            mail.select("INBOX")
 
         # Search for unseen emails AND recent emails from last 7 days
         # PEEK fetch ensures we don't auto-mark as read
