@@ -394,6 +394,7 @@ def _build_prompt(
         f"SUBJECT FORMAT: Use numbers — e.g. '3/2 {city} | ${asking_price//1000:.0f}k | ${int(arv-asking_price-(rehab_estimate or 0))//1000:.0f}k profit'. 6-10 words.\n"
         f"TOUCH 1 RULE: Must mention 'off-market' naturally in the body (not just subject).\n"
         f"NEVER use: 'is listed', 'listed at', 'listed for', 'on the market', 'just listed' — this is OFF-MARKET, not MLS.\n"
+        f"Write as if YOU own/control this deal. Say 'I have' or 'I'm sitting on' not 'I came across' or 'I found'.\n"
         f"Body must reference buyer's specific criteria.\n"
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
         f"DO NOT mention photos, attachments, or documents unless photos field is explicitly provided.\n"
@@ -564,6 +565,15 @@ async def generate_touch_email(
                     )
                 else:
                     body = body + f" Rehab estimate is ${int(rehab_estimate):,}."
+
+        # Post-process: fix "came across" — operator owns/controls the deal
+        body = body.replace("I came across", "I have")
+        body = body.replace("came across a", "have a")
+        body = body.replace("came across an", "have an")
+        body = body.replace("I found a", "I have a")
+        body = body.replace("I found an", "I have an")
+        body = body.replace("I stumbled upon", "I have")
+        body = body.replace("I noticed a", "I have a")
 
         # Post-process: remove "listed" language (implies MLS / on-market)
         body = body.replace("is listed at", "is priced at")
