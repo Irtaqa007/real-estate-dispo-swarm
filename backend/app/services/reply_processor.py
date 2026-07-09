@@ -606,7 +606,7 @@ async def process_reply(
                                     holding_body = (
                                         validation.corrected_content or holding_body
                                     )
-                                except Exception:
+                                except Exception as e:
                                     logger.debug("reply_processor.py: suppressed error: %s", e)
                                     pass
 
@@ -670,7 +670,7 @@ async def process_reply(
                         )
                         if ai_summary:
                             thread_summary = ai_summary
-                    except Exception:
+                    except Exception as e:
                         logger.debug("reply_processor.py: suppressed error: %s", e)
                         pass
 
@@ -686,7 +686,7 @@ async def process_reply(
                         )
                         if extracted_price is not None:
                             negotiated_price = extracted_price
-                    except Exception:
+                    except Exception as e:
                         logger.debug("reply_processor.py: suppressed error: %s", e)
                         pass
 
@@ -1015,7 +1015,7 @@ async def match_reply_to_campaign(
                     buyer_id, campaign.id, campaign.deal_id,
                 )
                 return campaign, "header"
-        except ValueError:
+        except ValueError as e:
             logger.debug("reply_processor.py: suppressed error: %s", e)
             pass
 
@@ -1292,7 +1292,7 @@ async def detect_future_buying_window(
             try:
                 resolved_date = datetime.strptime(target_date_str, "%Y-%m-%d")
                 resolved_date = resolved_date.replace(tzinfo=timezone.utc)
-            except ValueError:
+            except ValueError as e:
                 logger.debug("reply_processor.py: suppressed error: %s", e)
                 pass
 
@@ -1300,7 +1300,7 @@ async def detect_future_buying_window(
             try:
                 dt = datetime.strptime(target_month_str, "%Y-%m")
                 resolved_date = dt.replace(day=1, tzinfo=timezone.utc)
-            except ValueError:
+            except ValueError as e:
                 logger.debug("reply_processor.py: suppressed error: %s", e)
                 pass
 

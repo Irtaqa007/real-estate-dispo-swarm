@@ -527,7 +527,7 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                                     holding_body = (
                                         validation.corrected_content or holding_body
                                     )
-                            except Exception:
+                            except Exception as e:
                                 logger.debug("campaigns.py: suppressed error: %s", e)
                                 pass
 

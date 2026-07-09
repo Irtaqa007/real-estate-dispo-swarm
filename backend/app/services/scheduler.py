@@ -236,7 +236,7 @@ async def process_scheduled_campaigns() -> int:
                                 subject_to_send = (subject_to_send
                                     .replace(wrong_full, correct_full)
                                     .replace(wrong_k, correct_k))
-                        except Exception:
+                        except Exception as e:
                             logger.debug("scheduler.py: suppressed error: %s", e)
                             pass
 
@@ -274,7 +274,7 @@ async def process_scheduled_campaigns() -> int:
                     try:
                         campaign.status = "Failed"
                         db.add(campaign)
-                    except Exception:
+                    except Exception as e:
                         logger.debug("scheduler.py: suppressed error: %s", e)
                         pass
 
@@ -507,7 +507,7 @@ async def process_buyer_replies() -> int:
                     if extracted.get("agreed_price"):
                         try:
                             campaign.agreed_price = float(str(extracted["agreed_price"]).replace(",","").replace("$",""))
-                        except Exception:
+                        except Exception as e:
                             logger.debug("scheduler.py: suppressed error: %s", e)
                             pass
 
@@ -1365,7 +1365,7 @@ async def _scheduler_loop() -> None:
             # ── Write scheduler heartbeat (never blocks the loop) ──
             try:
                 await save_scheduler_heartbeat(_tick_count)
-            except Exception:
+            except Exception as e:
                 logger.debug("scheduler.py: suppressed error: %s", e)
                 pass
 
@@ -1625,7 +1625,7 @@ async def _scheduler_loop() -> None:
 
             # Sleep 60 seconds between ticks
             await asyncio.sleep(TICK_INTERVAL_SECONDS)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as e:
         logger.info("Scheduler: background task cancelled")
         _running = False
     except Exception as e:

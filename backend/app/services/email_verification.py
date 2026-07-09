@@ -128,7 +128,7 @@ def _smtp_check(mx_server: str, email: str, from_email: str = "verify@realestate
         return {"success": None, "code": None, "message": "SMTP server disconnected"}
     except socket.timeout:
         return {"success": None, "code": None, "message": "SMTP connection timed out"}
-    except ConnectionRefusedError:
+    except ConnectionRefusedError as e:
         return {"success": None, "code": None, "message": "Connection refused"}
     except Exception as e:
         logger.warning("SMTP catch-all check failed: %s", e, exc_info=True)

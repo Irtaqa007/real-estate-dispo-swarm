@@ -279,7 +279,7 @@ async def groq_chat_completion(
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-        except Exception:
+        except Exception as e:
             # Fallback also failed — raise the original exception
             raise e
 
