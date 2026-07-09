@@ -557,6 +557,12 @@ async def generate_touch_email(
         subject = re.sub(r'(\d+)\.0bath', r'\1bath', subject)
         subject = subject.replace("gross spread", "profit")
         subject = subject.replace("gross profit", "profit")
+        subject = re.sub(r'\| \$(\d+k?) spread\b', r'| $\1 profit', subject)
+        subject = re.sub(r'\| \$(\d+k?) spread ', r'| $\1 profit ', subject)
+        # Ensure beds/baths prefix exists in subject
+        if beds and baths and not re.search(r'\d+/\d+', subject):
+            bath_int = int(baths) if baths == int(baths) else baths
+            subject = f"{beds}/{bath_int} " + subject
 
         # Post-process: enforce rehab mention when available
         if rehab_estimate and rehab_estimate > 0:
