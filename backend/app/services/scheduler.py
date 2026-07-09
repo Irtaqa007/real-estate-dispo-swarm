@@ -391,12 +391,29 @@ async def process_buyer_replies() -> int:
                                     == gmail_message_id,
                             ).limit(1)
                         )
-                        if existing_log.scalar_one_or_none():
-                            logger.debug(
-                                "Scheduler: skipping already-processed reply %s",
-                                gmail_message_id,
+                        existing_entry = existing_log.scalar_one_or_none()
+                        if existing_entry:
+                            # Only skip if the campaign was actually fully processed
+                            # (has reply_received_at set). If it was logged but rolled back,
+                            # the campaign won't have reply_received_at — reprocess it.
+                            _camp_check = await db.execute(
+                                select(Campaign).where(
+                                    Campaign.buyer_id == buyer_id,
+                                    Campaign.status.in_(["Sent", "Replied", "Passed", "Contract_Pending"]),
+                                    Campaign.reply_received_at.isnot(None),
+                                ).limit(1)
                             )
-                            continue
+                            if _camp_check.scalar_one_or_none():
+                                logger.debug(
+                                    "Scheduler: skipping already-processed reply %s",
+                                    gmail_message_id,
+                                )
+                                continue
+                            else:
+                                logger.info(
+                                    "Scheduler: reply %s was logged but campaign not updated — reprocessing",
+                                    gmail_message_id,
+                                )
 
                     # 5. Match reply to the correct campaign (thread-aware priority chain)
                     campaign, confidence_level = await match_reply_to_campaign(db, buyer_id, reply)
@@ -471,7 +488,7 @@ async def process_buyer_replies() -> int:
                     campaign.reply_body = raw_body
                     campaign.reply_intent = new_stage
                     campaign.conversation_stage = new_stage
-                    campaign.ai_extracted_insights = str(conv_result.get("classification", {}).get("notes", ""))[:500]
+                    campaign.ai_extracted_insights = str(conv_result.get("notes", "") or conv_result.get("ai_extracted_insights", ""))[:500]
 
                     # Store extracted contract info
                     if extracted.get("legal_name"):
