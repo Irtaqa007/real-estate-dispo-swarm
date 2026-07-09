@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # Groq
     groq_api_key: Optional[str] = None
-    groq_model: str = "qwen-qwq-32b"
+    groq_model: str = "llama-3.3-70b-versatile"
     groq_fallback_model: str = "llama-3.1-8b-instant"  # still valid, not deprecated
 
     # Gmail
