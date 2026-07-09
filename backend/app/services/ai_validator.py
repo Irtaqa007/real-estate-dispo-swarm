@@ -28,7 +28,7 @@ from app.services.groq_client import groq_chat_completion, extract_json_block
 logger = logging.getLogger(__name__)
 
 # ── Hallucination guard model (fast, not 70b) ──
-_HALLUCINATION_MODEL = settings.groq_fallback_model
+_HALLUCINATION_MODEL = "llama-3.1-8b-instant"
 
 
 # ---------------------------------------------------------------------------

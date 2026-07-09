@@ -75,6 +75,22 @@ def _next_missing_info(campaign: Campaign) -> Optional[str]:
     return None
 
 
+def _build_contract_info_status(campaign) -> str:
+    """Return a one-line summary of what contract info is collected vs missing."""
+    have, need = [], []
+    for label, val in [
+        ("name", campaign.buyer_legal_name),
+        ("phone", campaign.buyer_phone),
+        ("title", campaign.buyer_title_company),
+        ("price", campaign.agreed_price),
+    ]:
+        (have if val else need).append(label)
+    if need:
+        return f"Collected: {', '.join(have) or 'none'}. Still need: {', '.join(need)}."
+    return "All 4 collected."
+
+
+
 async def process_conversation(
     reply_body: str,
     reply_subject: str,
@@ -193,19 +209,7 @@ async def process_conversation(
         )
     )
 
-    # Build compact collected-info line (only show what's missing)
-    _have = []
-    _need = []
-    for label, val in [("name", campaign.buyer_legal_name),
-                       ("phone", campaign.buyer_phone),
-                       ("title", campaign.buyer_title_company),
-                       ("price", campaign.agreed_price)]:
-        (_have if val else _need).append(label)
-    _info_line = (
-        f"Collected: {', '.join(_have) or 'none'}. Still need: {', '.join(_need)}."
-        if _need else
-        "All 4 collected."
-    )
+    _info_line = _build_contract_info_status(campaign)
 
     system_prompt = (
         f"You are {settings.operator_name}, real estate wholesaler.\n"

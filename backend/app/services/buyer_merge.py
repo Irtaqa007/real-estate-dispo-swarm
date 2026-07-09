@@ -67,7 +67,7 @@ async def find_duplicate_buyer(
                 ),
             )
         )
-        all_matches = result.scalars().all()  # NOTE: consider .limit() for large datasets
+        all_matches = result.scalars().all()
 
         for buyer in all_matches:
             buyer_name = (buyer.full_name or "").strip().lower()
@@ -278,7 +278,7 @@ async def get_all_buyer_emails(db: AsyncSession, buyer_id: UUID) -> List[str]:
     result = await db.execute(
         select(BuyerEmail.email).where(BuyerEmail.buyer_id == buyer_id)
     )
-    additional = result.scalars().all()  # NOTE: consider .limit() for large datasets
+    additional = result.scalars().all()
     emails.extend([e for e in additional if e.lower() != buyer.email.lower()])
 
     return emails

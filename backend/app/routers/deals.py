@@ -1,7 +1,6 @@
 """Deal CRUD API endpoints."""
 
 import logging
-from app.config import settings
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -640,7 +639,7 @@ async def get_deal_pass_intelligence(
             ]
             response = await groq_chat_completion(
                 messages=messages,
-                model=settings.groq_fallback_model,
+                model="llama-3.1-8b-instant",
                 temperature=0.1,
                 max_tokens=100,
             )

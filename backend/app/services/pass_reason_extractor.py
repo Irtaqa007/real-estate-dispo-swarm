@@ -155,7 +155,7 @@ async def extract_pass_reason(
     try:
         response = await groq_chat_completion(
             messages=messages,
-            model=settings.groq_fallback_model,
+            model="llama-3.1-8b-instant",
             temperature=0.1,
             max_tokens=300,
         )

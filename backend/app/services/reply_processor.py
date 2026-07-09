@@ -46,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 from app.services.ai_validator import validate_ai_output
 from app.services.audit_logger import audit
 from app.services.gmail_service import send_email
-from app.services.groq_client import groq_chat_completion, extract_json_block
+from app.services.groq_client import groq_chat_completion
 from app.services.pass_reason_extractor import extract_pass_reason
 from app.models.models import BuyerReengagementSchedule
 
@@ -271,7 +271,7 @@ async def process_reply(
                 line for line in lines if not line.strip().startswith("```")
             )
 
-        parsed: dict = json.loads(extract_json_block(content))
+        parsed: dict = json.loads(content)
 
         raw_intent = (parsed.get("primary_intent") or "").strip()
         primary_intent = _INTENT_MAP.get(raw_intent, "Other")
@@ -847,7 +847,7 @@ async def extract_buybox_changes(reply_body: str, old_buy_box: str) -> dict:
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
-        parsed = json.loads(extract_json_block(content))
+        parsed = json.loads(content)
         return {
             "criteria_changed": parsed.get("criteria_changed", False),
             "new_criteria": (parsed.get("new_criteria") or "").strip(),
@@ -1248,7 +1248,7 @@ async def detect_future_buying_window(
     try:
         response = await groq_chat_completion(
             messages=messages,
-            model=settings.groq_fallback_model,
+            model="llama-3.1-8b-instant",
             temperature=0.2,
             max_tokens=200,
         )
@@ -1261,7 +1261,7 @@ async def detect_future_buying_window(
                 line for line in lines if not line.strip().startswith("```")
             )
 
-        parsed = json.loads(extract_json_block(content))
+        parsed = json.loads(content)
 
         if not parsed.get("has_future_signal"):
             return None
@@ -1423,7 +1423,7 @@ async def _generate_contract_thread_summary(
 
         response = await groq_chat_completion(
             messages=messages,
-            model=settings.groq_fallback_model,
+            model="llama-3.1-8b-instant",
             temperature=0.3,
             max_tokens=200,
         )
@@ -1514,7 +1514,7 @@ async def _extract_negotiated_price(
 
         response = await groq_chat_completion(
             messages=messages,
-            model=settings.groq_fallback_model,
+            model="llama-3.1-8b-instant",
             temperature=0.2,
             max_tokens=100,
         )
@@ -1524,7 +1524,7 @@ async def _extract_negotiated_price(
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
-        parsed = json.loads(extract_json_block(content))
+        parsed = json.loads(content)
         if parsed.get("has_price") and parsed.get("price") is not None:
             return float(parsed["price"])
 
