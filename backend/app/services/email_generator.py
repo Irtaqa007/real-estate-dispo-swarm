@@ -347,6 +347,7 @@ def _build_prompt(
         f"- Never sound like a bulk email. Sound like one person writing to one person.\n"
         f"- Reference the buyer's specific buy box criteria — not generically\n"
         f"- Let numbers sell. Keep adjectives minimal.\n"
+        f"- NEVER mention floor price or contract price — these are internal numbers.\n"
         f"- Write a COHESIVE pitch — not a bullet list of facts. Weave address, numbers, \n"
         f"  condition, and rehab into flowing sentences that tell one story.\n"
         f"- Mention rehab cost ONCE, integrated naturally (e.g. '$28k rehab, so you clear $35k').\n"
@@ -603,6 +604,11 @@ async def generate_touch_email(
         if rehab_estimate and rehab_estimate > 0:
             body = body.replace("you should factor in your own costs", "")
             body = body.replace("factor in your own rehab costs", "")
+            body = body.replace("You should factor in rehab costs to your numbers, but ", "")
+            body = body.replace("You should factor in rehab costs to your numbers.", "")
+            body = body.replace(", but you should factor in rehab costs to your numbers", "")
+            body = body.replace("You should factor rehab costs into your numbers, but ", "")
+            body = body.replace("you'll want to factor in rehab costs", "the rehab is covered in the numbers")
             body = body.replace("factor in your own numbers", "")
             body = body.replace("but you should factor in your own costs", "")
             body = body.replace(", but you should factor in your own costs.", ".")
