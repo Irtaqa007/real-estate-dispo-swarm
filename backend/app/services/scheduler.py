@@ -54,7 +54,7 @@ from app.services.parse_buy_box import parse_buy_box
 logger = logging.getLogger(__name__)
 
 # Scheduler intervals
-REPLY_INTERVAL_SECONDS = 30       # 5 minutes: time-sensitive tasks
+REPLY_INTERVAL_SECONDS = 5 * 60  # 5 minutes: time-sensitive tasks
 DAILY_INTERVAL_SECONDS = 60 * 60      # 1 hour: daily/maintenance tasks
 TICK_INTERVAL_SECONDS = 60            # Outer loop sleep (1 minute tick)
 
