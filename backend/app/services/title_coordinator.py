@@ -26,7 +26,7 @@ from app.config import settings
 import app.database as _db
 from app.models.models import ActivityLog, Deal, JVPartner
 from app.services.gmail_service import send_email
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 from app.services.matching_service import trigger_release_for_deal_async
 from app.services.resilience import log_retry_attempt, record_metric
 
@@ -155,7 +155,7 @@ async def classify_title_email(email_data: dict) -> dict:
                 line for line in lines if not line.strip().startswith("```")
             )
 
-        parsed: dict = json.loads(content)
+        parsed: dict = json.loads(extract_json_block(content))
 
         raw_intent = (parsed.get("intent") or "").strip()
         intent = _INTENT_MAP.get(raw_intent, "Other")

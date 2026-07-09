@@ -202,8 +202,9 @@ async def process_conversation(
                        ("price", campaign.agreed_price)]:
         (_have if val else _need).append(label)
     _info_line = (
-        f"Collected: {', '.join(_have) or 'none'}. "
-        f"Still need: {', '.join(_need)}." if _need else "All 4 collected."
+        f"Collected: {', '.join(_have) or 'none'}. Still need: {', '.join(_need)}."
+        if _need else
+        "All 4 collected."
     )
 
     system_prompt = (

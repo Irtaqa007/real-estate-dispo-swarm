@@ -23,7 +23,7 @@ from typing import Any, Optional
 from app.config import settings
 from app.models.models import Buyer, Deal
 from app.services.audit_logger import audit
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 
 logger = logging.getLogger(__name__)
 

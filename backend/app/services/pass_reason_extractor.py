@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.models.models import Buyer, Campaign, Deal
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ async def extract_pass_reason(
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
-        parsed: dict = json.loads(content)
+        parsed: dict = json.loads(extract_json_block(content))
 
         category = parsed.get("category", "no_reason_given")
         if category not in _PASS_CATEGORIES:

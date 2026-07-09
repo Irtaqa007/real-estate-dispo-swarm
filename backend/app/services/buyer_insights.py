@@ -21,7 +21,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Buyer, Campaign, Deal
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +297,7 @@ async def _get_rehab_appetite(
         if content.startswith("```"):
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
-        parsed = json.loads(content)
+        parsed = json.loads(extract_json_block(content))
         return {
             "appetite": parsed.get("appetite", "unknown"),
             "preference": parsed.get("preference", ""),

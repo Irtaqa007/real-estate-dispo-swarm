@@ -16,7 +16,7 @@ import json
 import logging
 from typing import Dict, Optional
 
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ async def parse_buy_box(buy_box: str) -> Dict:
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
-        parsed = json.loads(content)
+        parsed = json.loads(extract_json_block(content))
         result = {
             "price_min": _safe_float(parsed.get("price_min")),
             "price_max": _safe_float(parsed.get("price_max")),

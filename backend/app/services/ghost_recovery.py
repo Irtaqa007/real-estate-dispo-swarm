@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from app.config import settings
 from app.models.models import Buyer, Campaign, Deal
 from app.services.ai_validator import validate_ai_output
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +285,7 @@ async def generate_ghost_recovery_email(
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
-        parsed: dict = json.loads(content)
+        parsed: dict = json.loads(extract_json_block(content))
         subject = (parsed.get("subject") or "").strip()
         body = (parsed.get("body") or "").strip()
 
