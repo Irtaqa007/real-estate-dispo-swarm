@@ -5,6 +5,7 @@ trigger weights, and CTA psychology based on wholesale real estate expertise.
 """
 
 import json
+import re
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
