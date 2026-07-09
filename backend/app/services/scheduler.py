@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # Scheduler intervals
 REPLY_INTERVAL_SECONDS = 30  # 30s for testing (change to 5*60 before go-live)
 DAILY_INTERVAL_SECONDS = 60 * 60      # 1 hour: daily/maintenance tasks
-TICK_INTERVAL_SECONDS = 60            # Outer loop sleep (1 minute tick)
+TICK_INTERVAL_SECONDS = 15            # Outer loop sleep (15s tick — enables 30s reply intervals)
 
 # ---------------------------------------------------------------------------
 # Core scheduling logic
@@ -592,6 +592,7 @@ async def process_buyer_replies() -> int:
                                 to=buyer_obj.email,
                                 subject=f"Re: {reply.get('subject', '')}",
                                 body=next_message,
+                                campaign_id=campaign.id.hex,
                                 send_type="reply",
                             )
                             logger.info(
@@ -1420,6 +1421,7 @@ async def _scheduler_loop() -> None:
                     async with _db.async_session_factory() as db:
                         released = await process_queued_matches(db)
                         if released > 0:
+                            await db.commit()
                             logger.info("Scheduler: released %d queued deal matches", released)
                 except Exception as e:
                     logger.error("Scheduler: queued match processing failed: %s", e, exc_info=True)

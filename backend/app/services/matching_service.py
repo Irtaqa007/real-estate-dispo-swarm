@@ -412,7 +412,6 @@ async def process_queued_matches(
             continue
 
     if released_count > 0:
-        await db.commit()
         logger.info("Released %d queued matches", released_count)
 
     return released_count
