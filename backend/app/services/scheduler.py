@@ -515,18 +515,20 @@ async def process_buyer_replies() -> int:
                     if conv_result["pass_detected"] or conv_result["unsubscribe_detected"]:
                         campaign.status = "Passed"
                         passed_buyer_ids.append(buyer_id)
+                        # Pause ALL remaining queued touches for this buyer+deal
+                        _q = await db.execute(
+                            select(Campaign).where(
+                                Campaign.buyer_id == buyer_id,
+                                Campaign.deal_id == campaign.deal_id,
+                                Campaign.status == "Queued",
+                            )
+                        )
+                        for qc in _q.scalars().all():
+                            qc.status = "Paused"
+                            db.add(qc)
                         if conv_result["unsubscribe_detected"]:
                             buyer_obj.unsubscribed_at = now
                             buyer_obj.status = "Do Not Contact"
-                            _q = await db.execute(
-                                select(Campaign).where(
-                                    Campaign.buyer_id == buyer_id,
-                                    Campaign.status == "Queued",
-                                )
-                            )
-                            for qc in _q.scalars().all():
-                                qc.status = "Paused"
-                                db.add(qc)
                     elif conv_result["contract_ready"]:
                         campaign.status = "Contract_Pending"
                         jv = await db.get(JVPartner, deal_obj.jv_partner_id) if deal_obj.jv_partner_id else None
