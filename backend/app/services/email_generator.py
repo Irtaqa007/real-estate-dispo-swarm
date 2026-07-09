@@ -493,7 +493,7 @@ async def generate_touch_email(
         response = await groq_chat_completion(
             messages=messages,
             temperature=0.7,
-            max_tokens=300,
+            max_tokens=800,
         )
 
         content = response.choices[0].message.content.strip()
