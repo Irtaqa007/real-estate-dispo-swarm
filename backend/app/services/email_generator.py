@@ -374,6 +374,7 @@ def _build_prompt(
         f"\n"
         f"KEY NUMBERS (copy exactly, do not compute anything yourself):\n"
         f"  Asking price: ${asking_price:,.0f}\n"
+        + (f"  ZIP: {zip_code} — use ONLY this zip, never invent one\n" if zip_code else "")
         + (
             f"  Rehab estimate: ${rehab_estimate:,.0f}\n"
             f"  Buyer all-in: ${asking_price + rehab_estimate:,.0f}\n"
@@ -396,14 +397,14 @@ def _build_prompt(
         f"SUBJECT FORMAT: Use numbers — e.g. '3/2 {city} | ${asking_price//1000:.0f}k | ${int(arv-asking_price-(rehab_estimate or 0))//1000:.0f}k profit'. 6-10 words.\n"
         f"TOUCH 1 RULE: Must mention 'off-market' naturally in the body (not just subject).\n"
         f"NEVER use: 'is listed', 'listed at', 'listed for', 'on the market', 'just listed' — this is OFF-MARKET, not MLS.\n"
-        f"Write as if YOU have this deal UNDER CONTRACT. Opening must say something like 'I have [address] under contract' or 'I've got [address] under contract'. Never say 'I came across' or 'I found' or 'I'm sitting on'.\n"
+        f"Say 'I have [address] under contract' or 'I've got [address] under contract'. You are a wholesaler who has the deal under contract. Never say 'I came across' or 'I'm sitting on'.\n"
         f"Body must reference buyer's specific criteria.\n"
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
         f"DO NOT mention photos, attachments, or documents unless photos field is explicitly provided.\n"
         + (
             f"REHAB IS KNOWN: ${rehab_estimate:,.0f}. PROFIT IS KNOWN: ${arv - asking_price - rehab_estimate:,.0f} AFTER rehab.\n"
             f"MANDATORY: state rehab cost AND profit in the body. The buyer does NOT need to calculate anything.\n"
-            f"FORBIDDEN: Do NOT say 'factor in rehab', 'run your own numbers', 'factor in your costs'. The numbers are given.\n"
+            f"FORBIDDEN: Do NOT say 'factor in rehab', 'run your own numbers', 'factor in your costs'. The rehab number is already given.\n"
             if rehab_estimate else
             f"Rehab cost UNKNOWN — do NOT state any profit number. Mention asking price and ARV only. Tell buyer to factor in their own rehab estimate.\n"
         )
@@ -482,6 +483,8 @@ async def generate_touch_email(
         asking_price=asking_price,
         spread=spread,
         condition_description=condition_description,
+        zip_code=zip_code,
+        rehab_estimate=rehab_estimate,
         beds=beds,
         baths=baths,
         sqft=sqft,
@@ -674,6 +677,10 @@ async def generate_touch_email(
         import re as _re
         body = _re.sub(r'\n\s*Best,\s*\nIrtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
         body = _re.sub(r'\n\s*Best,\s*Irtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
+
+        # Post-process: fix ZIP code hallucination — replace any 5-digit number with correct zip
+        if zip_code:
+            body = re.sub(r'\b\d{5}\b', zip_code, body)
 
         # Post-process: generic number correction
         # Replace ANY dollar amount in body/subject that matches a wrong computed value
