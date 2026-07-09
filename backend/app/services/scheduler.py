@@ -427,9 +427,8 @@ async def process_buyer_replies() -> int:
                         continue
 
                     logger.info(
-                        "Scheduler: reply from buyer %s matched to campaign %s via %s (deal: %s) | clean_body=%.80s",
+                        "Scheduler: reply from buyer %s matched to campaign %s via %s (deal: %s)",
                         buyer_id, campaign.id, confidence_level, campaign.deal_id,
-                        clean_body if 'clean_body' in dir() else raw_body[:80],
                     )
 
                     # 5. Load deal and buyer fresh to avoid expired ORM state
