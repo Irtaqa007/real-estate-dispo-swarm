@@ -197,7 +197,6 @@ def _build_prompt(
     asking_price: float,
     spread: float,
     condition_description: str,
-    zip_code: str = "",
     rehab_estimate: Optional[float] = None,
     beds: Optional[int] = None,
     baths: Optional[float] = None,
@@ -373,7 +372,6 @@ def _build_prompt(
         f"\n"
         f"\n"
         f"KEY NUMBERS (copy exactly, do not compute anything yourself):\n"
-        f"- ZIP CODE: {zip_code} — use ONLY this zip, never invent a zip\n"
         f"  Asking price: ${asking_price:,.0f}\n"
         + (
             f"  Rehab estimate: ${rehab_estimate:,.0f}\n"
@@ -395,18 +393,18 @@ def _build_prompt(
         f"TONE NOTE: {config.get('tone_note', '')}\n"
         f"CTA TYPE: {config['cta_type']}\n\n"
         f"SUBJECT FORMAT: Use numbers — e.g. '3/2 {city} | ${asking_price//1000:.0f}k | ${int(arv-asking_price-(rehab_estimate or 0))//1000:.0f}k profit'. 6-10 words.\n"
-        f"TOUCH 1 RULE: Must mention 'off-market' or 'under contract' naturally in the body.\n"
-        f"You CONTROL this deal — you have it under contract. Write as the principal, not a finder.\n"
+        f"TOUCH 1 RULE: Must mention 'off-market' naturally in the body (not just subject).\n"
         f"NEVER use: 'is listed', 'listed at', 'listed for', 'on the market', 'just listed' — this is OFF-MARKET, not MLS.\n"
-        f"Write as if YOU have this deal under contract. Say 'I have under contract' or 'I'm sitting on' — you are the principal.\n"
+        f"Write as if YOU have this deal UNDER CONTRACT. Opening must say something like 'I have [address] under contract' or 'I've got [address] under contract'. Never say 'I came across' or 'I found' or 'I'm sitting on'.\n"
         f"Body must reference buyer's specific criteria.\n"
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
         f"DO NOT mention photos, attachments, or documents unless photos field is explicitly provided.\n"
         + (
-            f"NUMBERS TO USE: ${rehab_estimate:,.0f} rehab, ${arv - asking_price - rehab_estimate:,.0f} buyer profit AFTER rehab, ${asking_price + rehab_estimate:,.0f} all-in.\n"
-            f"Include ALL THREE numbers in the body naturally. Never say 'before rehab'. Never omit rehab cost.\n"
+            f"REHAB IS KNOWN: ${rehab_estimate:,.0f}. PROFIT IS KNOWN: ${arv - asking_price - rehab_estimate:,.0f} AFTER rehab.\n"
+            f"MANDATORY: state rehab cost AND profit in the body. The buyer does NOT need to calculate anything.\n"
+            f"FORBIDDEN: Do NOT say 'factor in rehab', 'run your own numbers', 'factor in your costs'. The numbers are given.\n"
             if rehab_estimate else
-            f"Rehab cost UNKNOWN — do NOT state any profit number. Just mention asking, ARV, condition. Tell buyer to factor in their own rehab costs.\n"
+            f"Rehab cost UNKNOWN — do NOT state any profit number. Mention asking price and ARV only. Tell buyer to factor in their own rehab estimate.\n"
         )
         + f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
         f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
@@ -436,7 +434,6 @@ async def generate_touch_email(
     asking_price: float,
     spread: float,
     condition_description: str,
-    zip_code: str = "",
     rehab_estimate: Optional[float] = None,
     beds: Optional[int] = None,
     baths: Optional[float] = None,
@@ -592,10 +589,6 @@ async def generate_touch_email(
         body = body.replace("I stumbled upon", "I have")
         body = body.replace("I noticed a", "I have a")
 
-        # Post-process: fix zip hallucination — replace any wrong zip
-        if zip_code and zip_code not in body:
-            # Remove any 5-digit zip that appears and replace with correct one
-            body = re.sub(r'\b7\d{4}\b', zip_code, body)
         # Post-process: remove "listed" language (implies MLS / on-market)
         body = body.replace("is listed at", "is priced at")
         body = body.replace("listed at $", "priced at $")
@@ -608,23 +601,23 @@ async def generate_touch_email(
         body = body.replace("just listed", "just came up")
         body = body.replace("new listing", "new deal")
 
-        # Post-process: remove "factor in your own costs" when rehab is known
+        # Post-process: remove ALL "factor in rehab" language when rehab IS known
         if rehab_estimate and rehab_estimate > 0:
-            body = body.replace("you should factor in your own costs", "")
-            body = body.replace("factor in your own rehab costs", "")
-            body = body.replace("You should factor in rehab costs to your numbers, but ", "")
-            body = body.replace("You should factor in rehab costs to your numbers.", "")
-            body = body.replace(", but you should factor in rehab costs to your numbers", "")
-            body = body.replace("You should factor rehab costs into your numbers, but ", "")
-            body = body.replace("you'll want to factor in rehab costs to your numbers", "the $22k rehab is already factored in")
-            body = body.replace("you'll want to factor in rehab costs", "the rehab is already factored in")
-            body = body.replace("You'll want to factor in rehab costs to your numbers.", "")
-            body = body.replace("You'll want to factor in rehab costs to your numbers,", "")
-            body = body.replace(", but you'll want to factor in rehab costs to your numbers", "")
-            body = body.replace("factor in your own numbers", "")
-            body = body.replace("but you should factor in your own costs", "")
-            body = body.replace(", but you should factor in your own costs.", ".")
-            body = re.sub(r'  +', ' ', body).strip()
+            import re as _re
+            # These phrases contradict the rehab number we already gave
+            _factor_patterns = [
+                r"[Yy]ou(?:'ll)? want to factor in rehab costs?[^.]*\.",
+                r"[Yy]ou should factor (?:in )?(?:your own )?(?:rehab )?(?:costs?|numbers?)[^.]*\.",
+                r"[Ff]actor in (?:your own )?(?:rehab )?(?:costs?|numbers?)[^.]*\.",
+                r"[Rr]un your own (?:rehab )?numbers[^.]*\.",
+                r"[Yy]ou'll want to factor[^.]*\.",
+                r", but (?:you|you'll need to) factor[^.]*\.",
+            ]
+            for pat in _factor_patterns:
+                body = _re.sub(pat, "", body).strip()
+            # Clean up double spaces or orphaned punctuation
+            body = _re.sub(r'  +', ' ', body)
+            body = _re.sub(r'\. \.', '.', body)
 
         # Post-process: fix spread/profit framing
         body = body.replace("spread before rehab", "buyer profit after rehab")
