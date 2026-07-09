@@ -929,6 +929,7 @@ async def launch_campaign(
     # 5. Update deal status
     deal.status = "Campaign Launched"
     db.add(deal)
+    _deal_address = deal.address  # cache before commit (avoids MissingGreenlet after rollback)
 
     # Commit everything — catch race condition duplicate inserts gracefully
     try:
@@ -937,11 +938,9 @@ async def launch_campaign(
         if "uq_campaigns_buyer_deal_touch" in str(commit_err) or "UniqueViolation" in str(commit_err):
             await db.rollback()
             logger.warning("Campaign launch race condition detected for deal %s — campaigns already exist", deal_id)
-            # Fix any Failed touch 1 that was actually sent before the conflict
-            # Note: touch 1 status fix happens via scheduler's sent_at IS NULL guard
             return CampaignLaunchResponse(
                 deal_id=deal_id,
-                deal_address=deal.address,
+                deal_address=_deal_address,
                 total_buyers=0,
                 total_campaigns_created=0,
                 results=[],
@@ -956,7 +955,7 @@ async def launch_campaign(
 
     return CampaignLaunchResponse(
         deal_id=deal_id,
-        deal_address=deal.address,
+        deal_address=_deal_address,
         total_buyers=len(final_pairs),
         total_campaigns_created=total_touches_created,
         results=all_results,
