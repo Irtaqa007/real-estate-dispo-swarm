@@ -197,6 +197,7 @@ def _build_prompt(
     asking_price: float,
     spread: float,
     condition_description: str,
+    zip_code: str = "",
     rehab_estimate: Optional[float] = None,
     beds: Optional[int] = None,
     baths: Optional[float] = None,
@@ -372,6 +373,7 @@ def _build_prompt(
         f"\n"
         f"\n"
         f"KEY NUMBERS (copy exactly, do not compute anything yourself):\n"
+        f"- ZIP CODE: {zip_code} — use ONLY this zip, never invent a zip\n"
         f"  Asking price: ${asking_price:,.0f}\n"
         + (
             f"  Rehab estimate: ${rehab_estimate:,.0f}\n"
@@ -393,9 +395,10 @@ def _build_prompt(
         f"TONE NOTE: {config.get('tone_note', '')}\n"
         f"CTA TYPE: {config['cta_type']}\n\n"
         f"SUBJECT FORMAT: Use numbers — e.g. '3/2 {city} | ${asking_price//1000:.0f}k | ${int(arv-asking_price-(rehab_estimate or 0))//1000:.0f}k profit'. 6-10 words.\n"
-        f"TOUCH 1 RULE: Must mention 'off-market' naturally in the body (not just subject).\n"
+        f"TOUCH 1 RULE: Must mention 'off-market' or 'under contract' naturally in the body.\n"
+        f"You CONTROL this deal — you have it under contract. Write as the principal, not a finder.\n"
         f"NEVER use: 'is listed', 'listed at', 'listed for', 'on the market', 'just listed' — this is OFF-MARKET, not MLS.\n"
-        f"Write as if YOU own/control this deal. Say 'I have' or 'I'm sitting on' not 'I came across' or 'I found'.\n"
+        f"Write as if YOU have this deal under contract. Say 'I have under contract' or 'I'm sitting on' — you are the principal.\n"
         f"Body must reference buyer's specific criteria.\n"
         f"DO NOT end the body with a sign-off like 'Best, Irtaqa' — it is appended automatically.\n"
         f"DO NOT mention photos, attachments, or documents unless photos field is explicitly provided.\n"
@@ -433,6 +436,7 @@ async def generate_touch_email(
     asking_price: float,
     spread: float,
     condition_description: str,
+    zip_code: str = "",
     rehab_estimate: Optional[float] = None,
     beds: Optional[int] = None,
     baths: Optional[float] = None,
@@ -588,6 +592,10 @@ async def generate_touch_email(
         body = body.replace("I stumbled upon", "I have")
         body = body.replace("I noticed a", "I have a")
 
+        # Post-process: fix zip hallucination — replace any wrong zip
+        if zip_code and zip_code not in body:
+            # Remove any 5-digit zip that appears and replace with correct one
+            body = re.sub(r'\b7\d{4}\b', zip_code, body)
         # Post-process: remove "listed" language (implies MLS / on-market)
         body = body.replace("is listed at", "is priced at")
         body = body.replace("listed at $", "priced at $")

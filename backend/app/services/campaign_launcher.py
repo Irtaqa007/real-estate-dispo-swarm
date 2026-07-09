@@ -171,6 +171,7 @@ async def launch_campaign_for_buyer(
             address=deal.address,
             city=deal.city or "",
             state=deal.state or "",
+            zip_code=deal.zip or "",
             property_type=deal.property_type,
             arv=float(deal.arv),
             asking_price=float(deal.asking_price),

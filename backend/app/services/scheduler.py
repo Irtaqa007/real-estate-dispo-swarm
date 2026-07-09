@@ -54,7 +54,7 @@ from app.services.parse_buy_box import parse_buy_box
 logger = logging.getLogger(__name__)
 
 # Scheduler intervals
-REPLY_INTERVAL_SECONDS = 5 * 60  # 5 minutes: time-sensitive tasks
+REPLY_INTERVAL_SECONDS = 30  # 30s for testing (change to 5*60 before go-live)
 DAILY_INTERVAL_SECONDS = 60 * 60      # 1 hour: daily/maintenance tasks
 TICK_INTERVAL_SECONDS = 60            # Outer loop sleep (1 minute tick)
 
@@ -1173,6 +1173,7 @@ async def fire_buyer_reengagements() -> int:
                             buyer_tier=buyer.buyer_tier or "C-List",
                             address=deal.address,
                             city=deal.city or "",
+                    zip_code=deal.zip or "",
                             state=deal.state or "",
                             property_type=deal.property_type,
                             arv=float(deal.arv),
