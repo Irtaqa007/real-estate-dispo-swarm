@@ -311,92 +311,6 @@ async def process_scheduled_campaigns() -> int:
             return 0
 
 
-async def _send_conversation_reply_and_log(
-    db, campaign, buyer_obj, reply, next_message,
-    new_stage, conv_result, from_email, buyer_id, gmail_message_id
-):
-    """Send the conversation engine reply and write the activity log entry."""
-    logger.info("Scheduler: next_message preview: %s", (next_message or "")[:100])
-    if next_message and not conv_result["pass_detected"]:
-        try:
-            await send_email(
-                to=buyer_obj.email,
-                subject=f"Re: {reply.get('subject', '')}",
-                body=next_message,
-                send_type="reply",
-            )
-            logger.info(
-                "Scheduler: conversation reply sent to buyer %s (stage: %s)",
-                buyer_id, new_stage,
-            )
-        except Exception as send_err:
-            logger.warning(
-                "Scheduler: failed to send reply to buyer %s: %s", buyer_id, send_err,
-            )
-
-    db.add(ActivityLog(
-        id=uuid.uuid4(),
-        entity_type="campaign",
-        entity_id=campaign.id,
-        action="reply_received",
-        metadata_json={
-            "conversation_stage": new_stage,
-            "from_email": from_email,
-            "subject": reply.get("subject", ""),
-            "buyer_id": str(buyer_id),
-            "deal_id": str(campaign.deal_id),
-            "contract_ready": conv_result["contract_ready"],
-            "pass_detected": conv_result["pass_detected"],
-            "gmail_message_id": gmail_message_id or "",
-        },
-    ))
-
-
-
-async def _is_reply_already_processed(db, gmail_message_id: str, buyer_id) -> bool:
-    """Return True only if this reply was fully processed (campaign updated)."""
-    existing = await db.execute(
-        select(ActivityLog).where(
-            ActivityLog.action == "reply_received",
-            ActivityLog.metadata_json["gmail_message_id"].astext == gmail_message_id,
-        ).limit(1)
-    )
-    if not existing.scalar_one_or_none():
-        return False
-    # Log entry exists — check if campaign was actually updated
-    camp = await db.execute(
-        select(Campaign).where(
-            Campaign.buyer_id == buyer_id,
-            Campaign.status.in_(["Sent", "Replied", "Passed", "Contract_Pending"]),
-            Campaign.reply_received_at.isnot(None),
-        ).limit(1)
-    )
-    if camp.scalar_one_or_none():
-        logger.debug("Scheduler: skipping already-processed reply %s", gmail_message_id)
-        return True
-    logger.info("Scheduler: reply %s logged but campaign not updated — reprocessing", gmail_message_id)
-    return False
-
-
-
-async def _build_thread_history(db, buyer_id, deal_id) -> list:
-    """Build conversation thread history for a buyer+deal pair."""
-    result = await db.execute(
-        select(Campaign).where(
-            Campaign.buyer_id == buyer_id,
-            Campaign.deal_id == deal_id,
-        ).order_by(Campaign.sent_at.asc().nullslast())
-    )
-    history = []
-    for tc in result.scalars().all():
-        if tc.body:
-            history.append({"role": "assistant", "content": tc.body[:600]})
-        if tc.reply_body:
-            history.append({"role": "user", "content": tc.reply_body[:600]})
-    return history
-
-
-
 async def process_buyer_replies() -> int:
     """Fetch buyer replies from Gmail and process them end-to-end.
 
@@ -471,8 +385,36 @@ async def process_buyer_replies() -> int:
                     # 4. Deduplication: skip if this Gmail message was already processed
                     gmail_message_id = reply.get("message_id") or reply.get("id")
                     if gmail_message_id:
-                        if await _is_reply_already_processed(db, gmail_message_id, buyer_id):
-                            continue
+                        existing_log = await db.execute(
+                            select(ActivityLog).where(
+                                ActivityLog.action == "reply_received",
+                                ActivityLog.metadata_json["gmail_message_id"].astext
+                                    == gmail_message_id,
+                            ).limit(1)
+                        )
+                        existing_entry = existing_log.scalar_one_or_none()
+                        if existing_entry:
+                            # Only skip if the campaign was actually fully processed
+                            # (has reply_received_at set). If it was logged but rolled back,
+                            # the campaign won't have reply_received_at — reprocess it.
+                            _camp_check = await db.execute(
+                                select(Campaign).where(
+                                    Campaign.buyer_id == buyer_id,
+                                    Campaign.status.in_(["Sent", "Replied", "Passed", "Contract_Pending"]),
+                                    Campaign.reply_received_at.isnot(None),
+                                ).limit(1)
+                            )
+                            if _camp_check.scalar_one_or_none():
+                                logger.debug(
+                                    "Scheduler: skipping already-processed reply %s",
+                                    gmail_message_id,
+                                )
+                                continue
+                            else:
+                                logger.info(
+                                    "Scheduler: reply %s was logged but campaign not updated — reprocessing",
+                                    gmail_message_id,
+                                )
 
                     # 5. Match reply to the correct campaign (thread-aware priority chain)
                     campaign, confidence_level = await match_reply_to_campaign(db, buyer_id, reply)
@@ -513,7 +455,19 @@ async def process_buyer_replies() -> int:
                         clean_body = raw_body[:500]  # Fallback if stripping removed everything
 
                     # 5b. Build thread history for conversation engine
-                    thread_history = await _build_thread_history(db, buyer_id, campaign.deal_id)
+                    _thread_r = await db.execute(
+                        select(Campaign).where(
+                            Campaign.buyer_id == buyer_id,
+                            Campaign.deal_id == campaign.deal_id,
+                        ).order_by(Campaign.sent_at.asc().nullslast())
+                    )
+                    thread_campaigns = _thread_r.scalars().all()
+                    thread_history = []
+                    for tc in thread_campaigns:
+                        if tc.body:
+                            thread_history.append({"role": "assistant", "content": tc.body[:600]})
+                        if tc.reply_body:
+                            thread_history.append({"role": "user", "content": tc.reply_body[:600]})
 
                     # 5c. Run conversation engine
                     conv_result = await process_conversation(
@@ -618,14 +572,46 @@ async def process_buyer_replies() -> int:
                     buyer_obj.last_reply_at = now
                     db.add(buyer_obj)
 
-                    # 7+8. Send reply and log activity
-                    await _send_conversation_reply_and_log(
-                        db=db, campaign=campaign, buyer_obj=buyer_obj,
-                        reply=reply, next_message=next_message,
-                        new_stage=new_stage, conv_result=conv_result,
-                        from_email=from_email, buyer_id=buyer_id,
-                        gmail_message_id=gmail_message_id,
+                    # 7. Send conversation engine reply
+                    logger.info(
+                        "Scheduler: next_message preview: %s",
+                        (next_message or "")[:100]
                     )
+                    if next_message and not conv_result["pass_detected"]:
+                        try:
+                            await send_email(
+                                to=buyer_obj.email,
+                                subject=f"Re: {reply.get('subject', '')}",
+                                body=next_message,
+                                send_type="reply",
+                            )
+                            logger.info(
+                                "Scheduler: conversation reply sent to buyer %s (stage: %s)",
+                                buyer_id, new_stage,
+                            )
+                        except Exception as send_err:
+                            logger.warning(
+                                "Scheduler: failed to send reply to buyer %s: %s",
+                                buyer_id, send_err,
+                            )
+
+                    # 8. Activity log
+                    db.add(ActivityLog(
+                        id=uuid.uuid4(),
+                        entity_type="campaign",
+                        entity_id=campaign.id,
+                        action="reply_received",
+                        metadata_json={
+                            "conversation_stage": new_stage,
+                            "from_email": from_email,
+                            "subject": reply.get("subject", ""),
+                            "buyer_id": str(buyer_id),
+                            "deal_id": str(campaign.deal_id),
+                            "contract_ready": conv_result["contract_ready"],
+                            "pass_detected": conv_result["pass_detected"],
+                            "gmail_message_id": gmail_message_id or "",
+                        },
+                    ))
 
 
                     processed_count += 1

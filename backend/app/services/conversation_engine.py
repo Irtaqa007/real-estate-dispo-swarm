@@ -30,6 +30,9 @@ from app.config import settings
 from app.models.models import Campaign, Deal, Buyer
 from app.services.groq_client import groq_chat_completion, extract_json_block
 
+__all__ = ['process_conversation']
+
+
 logger = logging.getLogger(__name__)
 
 # ── Hard-coded phrase lists for pre-AI detection ─────────────────────────────
@@ -75,22 +78,6 @@ def _next_missing_info(campaign: Campaign) -> Optional[str]:
     return None
 
 
-def _build_contract_info_status(campaign) -> str:
-    """Return a one-line summary of what contract info is collected vs missing."""
-    have, need = [], []
-    for label, val in [
-        ("name", campaign.buyer_legal_name),
-        ("phone", campaign.buyer_phone),
-        ("title", campaign.buyer_title_company),
-        ("price", campaign.agreed_price),
-    ]:
-        (have if val else need).append(label)
-    if need:
-        return f"Collected: {', '.join(have) or 'none'}. Still need: {', '.join(need)}."
-    return "All 4 collected."
-
-
-
 async def process_conversation(
     reply_body: str,
     reply_subject: str,
@@ -109,57 +96,12 @@ async def process_conversation(
     current_stage = campaign.conversation_stage or "pitching"
     reply_lower = reply_body.lower()
 
-    # ── Pre-check 1: Unsubscribe ─────────────────────────────────────────────
-    for phrase in _UNSUBSCRIBE_PHRASES:
-        if phrase in reply_lower:
-            logger.info(
-                "Conversation engine: pre-check unsubscribe detected for buyer %s", buyer.id
-            )
-            return {
-                "next_message": (
-                    f"Got it — removing you from my list. No further emails from me.\n\n"
-                    f"{settings.operator_signature}"
-                ),
-                "new_stage": "passed",
-                "contract_ready": False,
-                "pass_detected": True,
-                "unsubscribe_detected": True,
-                "extracted_info": {
-                    "legal_name": None, "phone": None,
-                    "title_company": None, "agreed_price": None,
-                },
-                "classification": {
-                    "stage_decision": "passed",
-                    "notes": f"pre-check: unsubscribe phrase '{phrase}' detected",
-                },
-            }
+    # ── Pre-checks (no AI needed) ────────────────────────────────────────────
+    early_result = _run_pre_checks(reply_body, settings)
+    if early_result is not None:
+        return early_result
 
-    # ── Pre-check 2: Hard pass ───────────────────────────────────────────────
-    for phrase in _HARD_PASS_PHRASES:
-        if phrase in reply_lower:
-            logger.info(
-                "Conversation engine: pre-check pass detected for buyer %s (phrase: %s)",
-                buyer.id, phrase,
-            )
-            return {
-                "next_message": (
-                    f"Understood — I'll keep you in mind if something more aligned comes up.\n\n"
-                    f"{settings.operator_signature}"
-                ),
-                "new_stage": "passed",
-                "contract_ready": False,
-                "pass_detected": True,
-                "unsubscribe_detected": False,
-                "extracted_info": {
-                    "legal_name": None, "phone": None,
-                    "title_company": None, "agreed_price": None,
-                },
-                "classification": {
-                    "stage_decision": "passed",
-                    "notes": f"pre-check: pass phrase '{phrase}' detected",
-                },
-            }
-
+    reply_lower = reply_body.lower().strip()
     # ── Build context for AI ─────────────────────────────────────────────────
     thread_str = ""
     for msg in thread_history[-6:]:
@@ -209,7 +151,19 @@ async def process_conversation(
         )
     )
 
-    _info_line = _build_contract_info_status(campaign)
+    # Build compact collected-info line (only show what's missing)
+    _have = []
+    _need = []
+    for label, val in [("name", campaign.buyer_legal_name),
+                       ("phone", campaign.buyer_phone),
+                       ("title", campaign.buyer_title_company),
+                       ("price", campaign.agreed_price)]:
+        (_have if val else _need).append(label)
+    _info_line = (
+        f"Collected: {', '.join(_have) or 'none'}. Still need: {', '.join(_need)}."
+        if _need else
+        "All 4 collected."
+    )
 
     system_prompt = (
         f"You are {settings.operator_name}, real estate wholesaler.\n"
