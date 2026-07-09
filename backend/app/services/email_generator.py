@@ -551,6 +551,9 @@ async def generate_touch_email(
         if rehab_estimate and rehab_estimate > 0:
             body = body.replace("before rehab", "after rehab")
             body = body.replace("gross profit", "buyer profit")
+        body = body.replace("gross spread", "buyer profit")
+        subject = subject.replace("gross spread", "profit")
+        subject = subject.replace("gross profit", "profit")
 
         # Post-process: enforce rehab mention when available
         if rehab_estimate and rehab_estimate > 0:

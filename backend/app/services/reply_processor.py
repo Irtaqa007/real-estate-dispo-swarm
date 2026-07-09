@@ -1248,7 +1248,7 @@ async def detect_future_buying_window(
     try:
         response = await groq_chat_completion(
             messages=messages,
-            model="llama-3.1-8b-instant",
+            model=settings.groq_fallback_model,
             temperature=0.2,
             max_tokens=200,
         )
@@ -1423,7 +1423,7 @@ async def _generate_contract_thread_summary(
 
         response = await groq_chat_completion(
             messages=messages,
-            model="llama-3.1-8b-instant",
+            model=settings.groq_fallback_model,
             temperature=0.3,
             max_tokens=200,
         )
@@ -1514,7 +1514,7 @@ async def _extract_negotiated_price(
 
         response = await groq_chat_completion(
             messages=messages,
-            model="llama-3.1-8b-instant",
+            model=settings.groq_fallback_model,
             temperature=0.2,
             max_tokens=100,
         )

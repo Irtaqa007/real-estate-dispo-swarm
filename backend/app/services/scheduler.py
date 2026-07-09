@@ -1625,12 +1625,8 @@ async def _scheduler_loop() -> None:
         logger.info("Scheduler: background task cancelled")
         _running = False
     except Exception as e:
-        logger.error("Scheduler: fatal error — will restart in 30s: %s", e, exc_info=True)
+        logger.error("Scheduler: fatal error: %s", e, exc_info=True)
         _running = False
-        await asyncio.sleep(30)
-        # Auto-restart the scheduler after fatal errors
-        logger.info("Scheduler: restarting after fatal error")
-        asyncio.get_event_loop().create_task(_scheduler_loop())
 
 
 def is_scheduler_running() -> bool:

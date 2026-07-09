@@ -97,30 +97,30 @@ async def process_conversation(
     reply_lower = reply_body.lower()
 
     # ── Pre-checks (no AI needed) ────────────────────────────────────────────
-    _reply_lower = reply_body.lower().strip()
+    _rlo = reply_body.lower().strip()
 
     _UNSUB = ["unsubscribe","remove me","take me off","stop contacting",
               "do not contact","opt out","stop emailing"]
     _PASS  = ["not for me","i'll pass","i will pass","pass on this","not interested",
               "no thanks","no thank you","doesn't fit","not buying","not in the market",
-              "stop reaching out","price is too high","pass on","no thanks"]
+              "stop reaching out","price is too high","pass on","no thanks","pass"]
 
-    if any(p in _reply_lower for p in _UNSUB):
+    if any(p in _rlo for p in _UNSUB):
         return {
-            "next_message": f"Got it — I'll remove you from my list.\n\n{settings.operator_signature}",
+            "next_message": f"Got it — removing you from my list.\n\n{settings.operator_signature}",
             "new_stage": "passed", "contract_ready": False,
             "pass_detected": False, "unsubscribe_detected": True,
-            "extracted_info": {}, "notes": "Unsubscribe detected via pre-check",
+            "extracted_info": {}, "notes": "Unsubscribe via pre-check",
         }
-    if any(p in _reply_lower for p in _PASS):
+    if any(p in _rlo for p in _PASS):
         return {
             "next_message": None,
             "new_stage": "passed", "contract_ready": False,
             "pass_detected": True, "unsubscribe_detected": False,
-            "extracted_info": {}, "notes": "Pass detected via pre-check",
+            "extracted_info": {}, "notes": "Pass via pre-check",
         }
 
-    reply_lower = _reply_lower
+    reply_lower = _rlo
     # ── Build context for AI ─────────────────────────────────────────────────
     thread_str = ""
     for msg in thread_history[-6:]:
