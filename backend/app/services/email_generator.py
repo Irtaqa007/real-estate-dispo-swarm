@@ -494,7 +494,7 @@ async def generate_touch_email(
         response = await groq_chat_completion(
             messages=messages,
             temperature=0.7,
-            max_tokens=800,
+            max_tokens=1200,
         )
 
         content = response.choices[0].message.content.strip()
@@ -514,7 +514,7 @@ async def generate_touch_email(
             retry_resp = await groq_chat_completion(
                 messages=retry_messages,
                 temperature=0.1,
-                max_tokens=800,
+                max_tokens=1200,
             )
             retry_content = extract_json_block(retry_resp.choices[0].message.content.strip())
             parsed = json.loads(retry_content)
