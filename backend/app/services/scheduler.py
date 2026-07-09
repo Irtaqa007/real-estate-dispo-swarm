@@ -237,6 +237,7 @@ async def process_scheduled_campaigns() -> int:
                                     .replace(wrong_full, correct_full)
                                     .replace(wrong_k, correct_k))
                         except Exception:
+                            logger.debug("scheduler.py: suppressed error: %s", e)
                             pass
 
                     result = await send_email(
@@ -274,6 +275,7 @@ async def process_scheduled_campaigns() -> int:
                         campaign.status = "Failed"
                         db.add(campaign)
                     except Exception:
+                        logger.debug("scheduler.py: suppressed error: %s", e)
                         pass
 
             # Commit all changes
@@ -506,6 +508,7 @@ async def process_buyer_replies() -> int:
                         try:
                             campaign.agreed_price = float(str(extracted["agreed_price"]).replace(",","").replace("$",""))
                         except Exception:
+                            logger.debug("scheduler.py: suppressed error: %s", e)
                             pass
 
                     # Handle terminal states
@@ -1363,6 +1366,7 @@ async def _scheduler_loop() -> None:
             try:
                 await save_scheduler_heartbeat(_tick_count)
             except Exception:
+                logger.debug("scheduler.py: suppressed error: %s", e)
                 pass
 
             # ====================================================================
@@ -1660,5 +1664,6 @@ async def stop_scheduler() -> None:
         try:
             await _scheduler_task
         except asyncio.CancelledError:
+            logger.debug("scheduler.py: suppressed error: %s", e)
             pass
         logger.info("Scheduler: stopped")

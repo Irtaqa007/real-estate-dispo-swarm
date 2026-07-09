@@ -46,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 from app.services.ai_validator import validate_ai_output
 from app.services.audit_logger import audit
 from app.services.gmail_service import send_email
-from app.services.groq_client import groq_chat_completion
+from app.services.groq_client import groq_chat_completion, extract_json_block
 from app.services.pass_reason_extractor import extract_pass_reason
 from app.models.models import BuyerReengagementSchedule
 
@@ -271,7 +271,7 @@ async def process_reply(
                 line for line in lines if not line.strip().startswith("```")
             )
 
-        parsed: dict = json.loads(content)
+        parsed: dict = json.loads(extract_json_block(content))
 
         raw_intent = (parsed.get("primary_intent") or "").strip()
         primary_intent = _INTENT_MAP.get(raw_intent, "Other")
@@ -607,6 +607,7 @@ async def process_reply(
                                         validation.corrected_content or holding_body
                                     )
                                 except Exception:
+                                    logger.debug("reply_processor.py: suppressed error: %s", e)
                                     pass
 
                                 await send_email(
@@ -670,6 +671,7 @@ async def process_reply(
                         if ai_summary:
                             thread_summary = ai_summary
                     except Exception:
+                        logger.debug("reply_processor.py: suppressed error: %s", e)
                         pass
 
                     # Extract negotiated price (best-effort, falls back to asking)
@@ -685,6 +687,7 @@ async def process_reply(
                         if extracted_price is not None:
                             negotiated_price = extracted_price
                     except Exception:
+                        logger.debug("reply_processor.py: suppressed error: %s", e)
                         pass
 
                     alert_metadata = {
@@ -847,7 +850,7 @@ async def extract_buybox_changes(reply_body: str, old_buy_box: str) -> dict:
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
-        parsed = json.loads(content)
+        parsed = json.loads(extract_json_block(content))
         return {
             "criteria_changed": parsed.get("criteria_changed", False),
             "new_criteria": (parsed.get("new_criteria") or "").strip(),
@@ -1013,6 +1016,7 @@ async def match_reply_to_campaign(
                 )
                 return campaign, "header"
         except ValueError:
+            logger.debug("reply_processor.py: suppressed error: %s", e)
             pass
 
     # ── Load all active campaigns for this buyer ──
@@ -1261,7 +1265,7 @@ async def detect_future_buying_window(
                 line for line in lines if not line.strip().startswith("```")
             )
 
-        parsed = json.loads(content)
+        parsed = json.loads(extract_json_block(content))
 
         if not parsed.get("has_future_signal"):
             return None
@@ -1289,6 +1293,7 @@ async def detect_future_buying_window(
                 resolved_date = datetime.strptime(target_date_str, "%Y-%m-%d")
                 resolved_date = resolved_date.replace(tzinfo=timezone.utc)
             except ValueError:
+                logger.debug("reply_processor.py: suppressed error: %s", e)
                 pass
 
         if resolved_date is None and target_month_str:
@@ -1296,6 +1301,7 @@ async def detect_future_buying_window(
                 dt = datetime.strptime(target_month_str, "%Y-%m")
                 resolved_date = dt.replace(day=1, tzinfo=timezone.utc)
             except ValueError:
+                logger.debug("reply_processor.py: suppressed error: %s", e)
                 pass
 
         if resolved_date is None:
@@ -1524,7 +1530,7 @@ async def _extract_negotiated_price(
             lines = content.split("\n")
             content = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
-        parsed = json.loads(content)
+        parsed = json.loads(extract_json_block(content))
         if parsed.get("has_price") and parsed.get("price") is not None:
             return float(parsed["price"])
 

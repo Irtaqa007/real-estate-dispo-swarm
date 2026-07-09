@@ -552,6 +552,9 @@ async def generate_touch_email(
             body = body.replace("before rehab", "after rehab")
             body = body.replace("gross profit", "buyer profit")
         body = body.replace("gross spread", "buyer profit")
+        # Fix float bath format in body
+        body = re.sub(r'(\d+)\.0bath', r'\1bath', body)
+        subject = re.sub(r'(\d+)\.0bath', r'\1bath', subject)
         subject = subject.replace("gross spread", "profit")
         subject = subject.replace("gross profit", "profit")
 
