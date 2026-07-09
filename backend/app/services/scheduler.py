@@ -86,6 +86,7 @@ async def process_scheduled_campaigns() -> int:
                     Campaign.status == "Queued",
                     Campaign.scheduled_send_at <= now,
                     Campaign.scheduled_send_at.isnot(None),
+                    Campaign.sent_at.is_(None),  # Never resend if already sent
                 )
             )
             queued_campaigns = result.scalars().all()

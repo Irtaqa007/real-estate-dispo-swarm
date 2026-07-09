@@ -205,7 +205,7 @@ async def launch_campaign_for_buyer(
         if touch_num == 1:
             if buyer_tier == "A-List":
                 touch_status = "Sent"
-                scheduled_send = launch_time
+                scheduled_send = None  # Already sent at launch — scheduler must never resend
             elif buyer_tier == "B-List":
                 touch_status = "Queued"
                 scheduled_send = launch_time + timedelta(days=1)

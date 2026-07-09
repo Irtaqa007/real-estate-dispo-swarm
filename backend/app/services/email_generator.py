@@ -557,6 +557,15 @@ async def generate_touch_email(
         body = body.replace("just listed", "just came up")
         body = body.replace("new listing", "new deal")
 
+        # Post-process: remove "factor in your own costs" when rehab is known
+        if rehab_estimate and rehab_estimate > 0:
+            body = body.replace("you should factor in your own costs", "")
+            body = body.replace("factor in your own rehab costs", "")
+            body = body.replace("factor in your own numbers", "")
+            body = body.replace("but you should factor in your own costs", "")
+            body = body.replace(", but you should factor in your own costs.", ".")
+            body = re.sub(r'  +', ' ', body).strip()
+
         # Post-process: fix spread/profit framing
         body = body.replace("spread before rehab", "buyer profit after rehab")
         body = body.replace("spread before renovation", "buyer profit after rehab")
