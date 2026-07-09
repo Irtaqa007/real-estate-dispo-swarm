@@ -58,7 +58,7 @@ async def reset_pitch_counters(db: AsyncSession) -> int:
             | (Buyer.pitches_this_week_reset_at < cutoff)
         )
     )
-    buyers = result.scalars().all()
+    buyers = result.scalars().all()  # NOTE: consider .limit() for large datasets
 
     count = 0
     now = datetime.now(timezone.utc)
@@ -175,7 +175,7 @@ async def run_tier_promotions(db: AsyncSession) -> List[Dict[str, any]]:
         List of promotion records: [{"buyer_id": ..., "old_tier": ..., "new_tier": ...}, ...]
     """
     result = await db.execute(select(Buyer).where(Buyer.status == "Active"))
-    all_buyers = result.scalars().all()
+    all_buyers = result.scalars().all()  # NOTE: consider .limit() for large datasets
 
     promotions = []
     now = datetime.now(timezone.utc)
@@ -301,7 +301,7 @@ async def calculate_and_update_engagement(db: AsyncSession) -> int:
         Number of buyers updated.
     """
     result = await db.execute(select(Buyer).where(Buyer.status == "Active"))
-    buyers = result.scalars().all()
+    buyers = result.scalars().all()  # NOTE: consider .limit() for large datasets
 
     count = 0
     for buyer in buyers:

@@ -178,7 +178,7 @@ async def get_jv_partner_intelligence(
             ]
             response = await groq_chat_completion(
                 messages=messages,
-                model="llama-3.1-8b-instant",
+                model=settings.groq_fallback_model,
                 temperature=0.1,
                 max_tokens=100,
             )

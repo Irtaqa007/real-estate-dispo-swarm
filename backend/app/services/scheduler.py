@@ -312,6 +312,7 @@ async def process_scheduled_campaigns() -> int:
 
 
 async def process_buyer_replies() -> int:
+    import re as _re  # moved from inner loop
     """Fetch buyer replies from Gmail and process them end-to-end.
 
     Replicates the full pipeline from the /api/campaigns/check-replies endpoint
@@ -442,7 +443,6 @@ async def process_buyer_replies() -> int:
                         continue
 
                     # Strip quoted thread from reply body before passing to AI
-                    import re as _re
                     raw_body = reply.get("body", "")
                     # Remove everything after "On ... wrote:" pattern (quoted original)
                     clean_body = _re.split(r'\n\s*On .{10,100}wrote:\s*\n', raw_body)[0].strip()

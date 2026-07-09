@@ -128,7 +128,7 @@ async def retry_failed_campaign(
     try:
         # Attempt to send the email
         send_result = await send_email_resilient(
-            to=buyer.email,
+            to=buyer.email if buyer else None,  # type: ignore
             subject=campaign.subject,
             body=campaign.body,
             campaign_id=campaign.id.hex,
