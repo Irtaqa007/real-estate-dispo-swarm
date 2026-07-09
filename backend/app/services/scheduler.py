@@ -1664,6 +1664,5 @@ async def stop_scheduler() -> None:
         try:
             await _scheduler_task
         except asyncio.CancelledError:
-            logger.debug("scheduler.py: suppressed error: %s", e)
             pass
         logger.info("Scheduler: stopped")
