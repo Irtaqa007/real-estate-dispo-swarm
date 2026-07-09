@@ -427,8 +427,9 @@ async def process_buyer_replies() -> int:
                         continue
 
                     logger.info(
-                        "Scheduler: reply from buyer %s matched to campaign %s via %s (deal: %s)",
+                        "Scheduler: reply from buyer %s matched to campaign %s via %s (deal: %s) | clean_body=%.80s",
                         buyer_id, campaign.id, confidence_level, campaign.deal_id,
+                        clean_body if 'clean_body' in dir() else raw_body[:80],
                     )
 
                     # 5. Load deal and buyer fresh to avoid expired ORM state
@@ -470,6 +471,10 @@ async def process_buyer_replies() -> int:
                             thread_history.append({"role": "user", "content": tc.reply_body[:600]})
 
                     # 5c. Run conversation engine
+                    logger.info(
+                        "Scheduler: calling conversation engine | stage=%s clean_body=%.80s",
+                        campaign.conversation_stage or "pitching", clean_body,
+                    )
                     conv_result = await process_conversation(
                         reply_body=clean_body,
                         reply_subject=reply.get("subject", ""),
