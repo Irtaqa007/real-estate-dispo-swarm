@@ -503,9 +503,25 @@ async def generate_touch_email(
         # Parse JSON robustly — handles markdown fences AND reasoning-model
         # <think> blocks (qwen-qwq etc.) that would otherwise break json.loads
         content = extract_json_block(content)
-        parsed = json.loads(content)
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            # Retry with explicit JSON-only instruction and lower temperature
+            logger.warning("Groq touch %d: JSON parse failed, retrying strict", touch)
+            retry_messages = messages.copy()
+            retry_messages.append({"role": "assistant", "content": content})
+            retry_messages.append({"role": "user", "content": 'Fix the JSON above. Return ONLY valid JSON with "subject" and "body" keys. No markdown, no newlines inside values (use \\n instead), no unescaped quotes.'})
+            retry_resp = await groq_chat_completion(
+                messages=retry_messages,
+                temperature=0.1,
+                max_tokens=800,
+            )
+            retry_content = extract_json_block(retry_resp.choices[0].message.content.strip())
+            parsed = json.loads(retry_content)
         subject = parsed.get("subject", "").strip()
         body = parsed.get("body", "").strip()
+        # Unescape literal \n sequences from model output
+        body = body.replace("\\n", "\n")
 
         # Post-process subject: fix beds/baths hallucination
         if beds and baths:
