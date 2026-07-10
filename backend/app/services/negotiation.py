@@ -96,37 +96,20 @@ async def handle_counter_offer(
             "contract_price": counter_price,
         }
     else:
-        # Needs manual review — below floor price
-        response_text = await _generate_deferral_response(
-            buyer_name=buyer_name,
-            deal=deal,
-            counter_price=counter_price,
+        # Below floor price — escalate to operator, send NO reply
+        logger.info(
+            "Negotiation escalation for buyer %s: counter $%.0f < floor $%.0f — deferring to operator",
+            buyer_name, counter_price, floor_price,
         )
-
-        # ── AI Validation pre-send guard ──
-        try:
-            validation = await validate_ai_output(
-                content=response_text,
-                content_type="negotiation_email",
-                deal=deal,
-            )
-        except Exception as val_err:
-            logger.error(
-                "AI validator failed for negotiation deferral response, proceeding: %s",
-                val_err,
-            )
-            validation = ValidationResult(severity="pass", corrected_content=None, violations=[], checks_run=[])
-
-        if validation.severity != "block":
-            response_text = validation.corrected_content or response_text
-
         return {
-            "action": "needs_manual_review",
-            "ai_response": response_text,
+            "action": "escalated",
+            "ai_response": None,  # No auto-response — operator decides
             "counter_price": counter_price,
             "floor_price": floor_price,
             "auto_approved": False,
             "contract_price": None,
+            "send_response": False,  # Signal to caller: do NOT send any reply
+            "needs_escalation": True,
         }
 
 

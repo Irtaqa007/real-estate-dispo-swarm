@@ -1,6 +1,6 @@
 """Pydantic schemas (request/response models) for the application."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional
 from uuid import UUID
 
@@ -176,6 +176,7 @@ class DealFields(BaseModel):
     photos: Optional[list[str]] = None
     jv_partner_id: UUID = Field(...)  # Required — every deal must have a JV partner
     jv_split_percentage: Optional[float] = Field(default=50, ge=0, le=100)
+    expiry_date: Optional[datetime] = None
 
 
 class DealBase(DealFields):
@@ -261,6 +262,7 @@ class DealUpdate(BaseModel):
     photos: Optional[list[str]] = None
     jv_partner_id: Optional[UUID] = None
     jv_split_percentage: Optional[float] = Field(None, ge=0, le=100)
+    expiry_date: Optional[datetime] = None
 
     @model_validator(mode="after")
     def validate_prices(self) -> "DealUpdate":
@@ -749,3 +751,93 @@ class ContractAlertResolveRequest(BaseModel):
     """Schema for resolving a contract alert."""
 
     notes: Optional[str] = Field(None, max_length=1000)
+
+
+# ---------------------------------------------------------------------------
+# Comparable Sales (Comps) schemas
+# ---------------------------------------------------------------------------
+
+
+class DealCompCreate(BaseModel):
+    """Schema for creating a comparable sale."""
+
+    address: str
+    sold_price: float
+    sold_date: date
+    beds: Optional[int] = None
+    baths: Optional[float] = None
+    sqft: Optional[int] = None
+    distance_miles: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class DealCompResponse(DealCompCreate):
+    """Schema for comp response."""
+
+    id: UUID
+    deal_id: UUID
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Package Deal schemas
+# ---------------------------------------------------------------------------
+
+
+class PackageCreate(BaseModel):
+    """Schema for creating a package deal."""
+
+    name: str
+    deal_ids: list[UUID]
+    package_price: float
+    floor_price: float
+    package_arv: Optional[float] = None
+    description: Optional[str] = None
+    expiry_date: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_deal_count(self) -> "PackageCreate":
+        if len(self.deal_ids) < 2 or len(self.deal_ids) > 5:
+            raise ValueError("Package must contain 2-5 deals")
+        return self
+
+    @model_validator(mode="after")
+    def validate_floor(self) -> "PackageCreate":
+        if "package_price" in self.model_fields_set and "floor_price" in self.model_fields_set:
+            if self.floor_price >= self.package_price:
+                raise ValueError("floor_price must be less than package_price")
+        return self
+
+
+class PackageUpdate(BaseModel):
+    """Schema for updating a package."""
+
+    name: Optional[str] = None
+    package_price: Optional[float] = None
+    package_arv: Optional[float] = None
+    floor_price: Optional[float] = None
+    description: Optional[str] = None
+    expiry_date: Optional[datetime] = None
+    status: Optional[str] = None
+
+
+class PackageResponse(BaseModel):
+    """Schema for package response with deal summaries."""
+
+    id: UUID
+    name: str
+    package_price: float
+    package_arv: Optional[float] = None
+    floor_price: float
+    status: str = "Active"
+    description: Optional[str] = None
+    expiry_date: Optional[datetime] = None
+    created_at: datetime
+    deals: list[dict] = []
+    total_individual_price: float = 0
+    savings: float = 0
+    campaign_stats: Optional[dict] = None
+
+    model_config = {"from_attributes": True}

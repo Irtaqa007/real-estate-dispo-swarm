@@ -346,6 +346,36 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                             "Counter auto-approved for deal %s: $%.2f (floor: $%.2f)",
                             campaign.deal_id, counter_price, negotiation_result["floor_price"],
                         )
+                    elif negotiation_result.get("action") == "escalated":
+                        # Below floor — create escalation alert, send NO reply
+                        await audit.log(
+                            db,
+                            entity_type="deal",
+                            entity_id=campaign.deal_id,
+                            action="negotiation_escalation",
+                            metadata={
+                                "alert_user": True,
+                                "priority": "high",
+                                "action_required": "Review and respond to below-floor counter",
+                                "buyer_id": str(buyer_id),
+                                "deal_id": str(campaign.deal_id),
+                                "campaign_id": str(campaign.id),
+                                "counter_price": counter_price,
+                                "floor_price": negotiation_result["floor_price"],
+                                "gap": negotiation_result["floor_price"] - counter_price,
+                                "buyer_name": buyer_obj.full_name if buyer_obj else "",
+                                "buyer_email": buyer_obj.email if buyer_obj else "",
+                                "deal_address": deal.address if deal else "",
+                            },
+                        )
+                        # Set campaign to negotiating so operator sees the flag
+                        campaign.conversation_stage = "negotiating"
+                        campaign.reply_intent = "negotiating"
+                        db.add(campaign)
+                        logger.info(
+                            "Negotiation escalation for deal %s: $%.2f below floor $%.2f — awaiting operator decision",
+                            campaign.deal_id, counter_price, negotiation_result["floor_price"],
+                        )
                     else:
                         logger.info(
                             "Counter below floor for deal %s: $%.2f (floor: $%.2f) — needs manual review",
@@ -1308,6 +1338,117 @@ async def send_all_campaigns(
         deal_id=deal_id,
         total_ready=len(campaigns),
         sent_count=sent_count,
-        failed_count=failed_count,
-        results=items,
+        failed_count=failed_count,            results=items,
     )
+
+
+# ---------------------------------------------------------------------------
+# Campaign pause / resume
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{deal_id}/pause")
+async def pause_campaigns(
+    deal_id: uuid.UUID,
+    body: dict = {},
+    db: AsyncSession = Depends(get_db),
+):
+    """Pause all Queued campaigns for a deal and set deal status to Paused."""
+    reason = body.get("reason", "") if isinstance(body, dict) else ""
+
+    deal = await db.get(Deal, deal_id)
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    # Find all Queued campaigns for this deal
+    queued_result = await db.execute(
+        select(Campaign).where(
+            Campaign.deal_id == deal_id,
+            Campaign.status == "Queued",
+        )
+    )
+    queued_campaigns = queued_result.scalars().all()
+
+    paused_count = 0
+    for c in queued_campaigns:
+        c.status = "Paused"
+        db.add(c)
+        paused_count += 1
+
+    deal.status = "Paused"
+    db.add(deal)
+
+    # Log to activity_log
+    log_entry = ActivityLog(
+        id=uuid.uuid4(),
+        entity_type="deal",
+        entity_id=deal_id,
+        action="campaign_paused",
+        metadata_json={
+            "paused_count": paused_count,
+            "reason": reason if reason else "manual_pause",
+            "deal_address": deal.address,
+        },
+    )
+    db.add(log_entry)
+
+    await db.commit()
+
+    logger.info(
+        "Paused %d campaigns for deal %s (%s)%s",
+        paused_count, deal_id, deal.address,
+        f" — reason: {reason}" if reason else "",
+    )
+
+    return {"paused_count": paused_count}
+
+
+@router.post("/{deal_id}/resume")
+async def resume_campaigns(
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resume all Paused campaigns for a deal and set deal back to Campaign Launched."""
+    deal = await db.get(Deal, deal_id)
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    # Find all Paused campaigns for this deal
+    paused_result = await db.execute(
+        select(Campaign).where(
+            Campaign.deal_id == deal_id,
+            Campaign.status == "Paused",
+        )
+    )
+    paused_campaigns = paused_result.scalars().all()
+
+    resumed_count = 0
+    for c in paused_campaigns:
+        c.status = "Queued"
+        db.add(c)
+        resumed_count += 1
+
+    deal.status = "Campaign Launched"
+    db.add(deal)
+
+    # Log to activity_log
+    log_entry = ActivityLog(
+        id=uuid.uuid4(),
+        entity_type="deal",
+        entity_id=deal_id,
+        action="campaign_resumed",
+        metadata_json={
+            "resumed_count": resumed_count,
+            "deal_address": deal.address,
+        },
+    )
+    db.add(log_entry)
+
+    await db.commit()
+
+    logger.info(
+        "Resumed %d campaigns for deal %s (%s)",
+        resumed_count, deal_id, deal.address,
+    )
+
+    return {"resumed_count": resumed_count}

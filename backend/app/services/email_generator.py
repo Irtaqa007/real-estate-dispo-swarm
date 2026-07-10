@@ -210,6 +210,8 @@ def _build_prompt(
     price_min: Optional[float] = None,
     price_max: Optional[float] = None,
     pref_cities: Optional[list[str]] = None,
+    # Comps parameters
+    comps: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Build the Groq chat prompt for generating a touch email."""
 
@@ -319,6 +321,23 @@ def _build_prompt(
         + "\n"
     ) if intelligence_lines else ""
 
+    # ── Comps injection (touch >= 3 only) ──
+    _comps_block = ""
+    if comps and touch >= 3:
+        comp = comps[0]  # use the best/first comp only
+        _comps_block = (
+            f"COMP DATA — use this ONE comp naturally to support the ARV:\n"
+            f"  {comp.get('address', '')} sold for ${comp.get('sold_price', 0):,.0f} on {comp.get('sold_date', '')} "
+            f"({comp.get('beds', '?')}bd/{comp.get('baths', '?')}bath, {comp.get('sqft', '?')}sqft)\n"
+            f"  Reference it naturally: 'A similar {comp.get('beds', '?')}/{comp.get('baths', '?')} "
+            f"nearby sold for ${comp.get('sold_price', 0):,.0f}' — do NOT list it as a bullet.\n\n"
+        )
+    elif touch >= 3:
+        _comps_block = (
+            f"DO NOT reference any comparable sales — no comp data available. "
+            f"Do not invent or hallucinate any sold prices.\n\n"
+        )
+
     system_prompt = (
         f"OPERATOR IDENTITY — you ARE this person, write entirely as them:\n"
         f"Name: {settings.operator_name}\n"
@@ -394,8 +413,9 @@ def _build_prompt(
             if rehab_estimate else
             f"Rehab cost UNKNOWN — do NOT state any profit number. Mention asking price and ARV only. Tell buyer to factor in their own rehab estimate.\n"
         )
-        + f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
-        f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
+        +        f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
+        + _comps_block
+        + f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
     )
 
     return [
@@ -437,6 +457,8 @@ async def generate_touch_email(
     price_min: Optional[float] = None,
     price_max: Optional[float] = None,
     pref_cities: Optional[list[str]] = None,
+    # Comps parameters
+    comps: Optional[list[dict]] = None,
 ) -> dict:
     """Generate a single touch email using Groq AI.
 
@@ -482,6 +504,7 @@ async def generate_touch_email(
         price_min=price_min,
         price_max=price_max,
         pref_cities=pref_cities,
+        comps=comps,
     )
 
     try:
@@ -724,6 +747,137 @@ async def generate_touch_email(
             "touch": touch,
             "status": "Failed",
             "scheduled_at": None,
+        }
+
+
+async def generate_package_email(
+    package,
+    deals: list,
+    buyer_name: str,
+    buyer_email: str,
+    buy_box: str,
+    buyer_tier: str,
+    touch: int,
+    package_price: float,
+    package_arv: float,
+    total_individual: float,
+    savings: float,
+    total_profit: float,
+) -> dict:
+    """Generate a package deal pitch email using Groq AI.
+
+    Args:
+        package: DealPackage model instance.
+        deals: List of Deal model instances in the package.
+        buyer_name, buyer_email, buy_box, buyer_tier: Buyer details.
+        touch: Touch number (1-4 for packages).
+        package_price, package_arv, total_individual, savings, total_profit: Financial details.
+
+    Returns:
+        dict with keys: subject, body, touch, status.
+    """
+    # Build properties listing
+    deal_lines = []
+    for d in deals:
+        beds_str = f"{d.beds}bd/" if d.beds else ""
+        baths_str = f"{int(d.baths) if d.baths and d.baths == int(d.baths) else d.baths}bath" if d.baths else ""
+        size_str = f"{beds_str}{baths_str}" if beds_str or baths_str else ""
+        line = f"- {d.address}"
+        if size_str:
+            line += f": {size_str}"
+        line += f", ${float(d.asking_price):,.0f} asking"
+        if d.arv:
+            line += f", ARV ${float(d.arv):,.0f}"
+        deal_lines.append(line)
+
+    deals_text = "\n".join(deal_lines)
+    num_deals = len(deals)
+    package_name = package.name if hasattr(package, 'name') else "Package"
+
+    system_prompt = (
+        f"OPERATOR IDENTITY — you ARE this person, write entirely as them:\n"
+        f"Name: {settings.operator_name}\n"
+        f"Sign-off every email with: {settings.operator_signature}\n"
+        f"Tone: {settings.operator_tone}\n"
+        f"Never use these words or phrases: {settings.operator_never_say}\n"
+        f"Context: {settings.operator_context}\n\n"
+        f"You are a real estate wholesaler. Write a {touch}-touch "
+        f"package deal pitch email.\n"
+        f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}\n"
+        f"No markdown, no code fences, no explanation outside the JSON"
+    )
+
+    user_prompt = (
+        f"BUYER: {buyer_name}, buy box: {buy_box}, tier: {buyer_tier}\n\n"
+        f"PACKAGE: {package_name}\n"
+        f"Package price: ${package_price:,.0f} for all {num_deals} properties\n"
+        + (f"Combined ARV: ${package_arv:,.0f}\n" if package_arv else "")
+        + (f"Total profit after rehab: ${total_profit:,.0f}\n" if total_profit else "")
+        + f"Savings vs individual: ${savings:,.0f}\n\n"
+        f"PROPERTIES:\n{deals_text}\n\n"
+        f"RULES:\n"
+        f"- Opening: \"I've got {num_deals} properties under contract that I'm bundling together\"\n"
+        f"- List each property briefly (one line each)\n"
+        f"- Show combined numbers: package price, combined ARV, total profit\n"
+        f"- Mention savings vs buying individually\n"
+        f"- Subject format: \"{num_deals}-Pack {settings.operator_context.split()[0] if settings.operator_context else 'San Antonio'} | ${int(package_price)//1000:.0f}k | ${int(total_profit)//1000:.0f}k profit\"\n"
+        f"- DO NOT say 'came across', 'found', 'listed'\n"
+        f"- DO NOT end the body with a sign-off — it is appended automatically\n"
+        f"- Max 150 words\n"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        response = await groq_chat_completion(
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1200,
+        )
+
+        content = response.choices[0].message.content.strip()
+        content = extract_json_block(content)
+        parsed = json.loads(content)
+        subject = parsed.get("subject", "").strip()
+        body = parsed.get("body", "").strip()
+        body = body.replace("\\n", "\n")
+
+        # Post-process: remove listed/found/came across language
+        body = body.replace("I came across", "I have")
+        body = body.replace("came across", "I have")
+        body = body.replace("I found", "I have")
+        body = body.replace("is listed at", "is priced at")
+        body = body.replace("listed at $", "priced at $")
+        body = body.replace("listed for $", "priced at $")
+
+        # Strip any sign-off the AI included
+        body = re.sub(r'\n\s*Best,\s*\n\w+\s*$', '', body, flags=re.IGNORECASE).rstrip()
+        body = re.sub(r'\n\s*Best,\s*\w+\s*$', '', body, flags=re.IGNORECASE).rstrip()
+
+        # Append sign-off
+        sign_off = settings.operator_signature.strip()
+        if sign_off and sign_off not in body:
+            body = body.rstrip() + "\n\n" + sign_off
+
+        logger.info("Generated package touch %d for buyer %s: '%s'", touch, buyer_name, subject[:60])
+
+        return {
+            "subject": subject,
+            "body": body,
+            "touch": touch,
+            "status": "Ready" if touch == 1 else "Queued",
+        }
+
+    except Exception as e:
+        logger.error("Failed to generate package email for touch %d: %s", touch, e, exc_info=True)
+        return {
+            "subject": f"Touch {touch} — {package_name}",
+            "body": f"Package deal follow-up on {package_name} (auto-generated).",
+            "touch": touch,
+            "status": "Failed",
         }
 
 

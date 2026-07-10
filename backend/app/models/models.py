@@ -12,7 +12,7 @@ Tables:
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, Column, Computed, DateTime, Float, ForeignKey, Index, Integer, Numeric, Text, func
+from sqlalchemy import Boolean, Column, Computed, DateTime, Float, ForeignKey, Index, Integer, Numeric, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -186,6 +186,8 @@ class Deal(Base):
     title_chase_count = Column(Integer, default=0)
     title_acknowledged = Column(Boolean, default=False)
     title_company_email = Column(Text, nullable=True)
+    # Expiry date — auto-stop campaigns when this passes
+    expiry_date = Column(DateTime(timezone=True), nullable=True)
     # Drive archive fields
     drive_folder_id = Column(Text, nullable=True)
     drive_archived = Column(Boolean, default=False)
@@ -238,6 +240,7 @@ class Campaign(Base):
     buyer_phone = Column(Text, nullable=True)
     buyer_title_company = Column(Text, nullable=True)
     agreed_price = Column(Numeric(19, 2), nullable=True)
+    package_id = Column(UUID(as_uuid=True), ForeignKey("deal_packages.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -384,6 +387,66 @@ class BuyerReengagementSchedule(Base):
 
     def __repr__(self) -> str:
         return f"<BuyerReengagementSchedule(id={self.id}, buyer={self.buyer_id}, target={self.target_date})>"
+
+
+class DealComp(Base):
+    """Comparable sales (comps) for a deal."""
+    __tablename__ = "deal_comps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id", ondelete="CASCADE"), nullable=False, index=True)
+    address = Column(Text, nullable=False)
+    sold_price = Column(Numeric(12, 2), nullable=False)
+    sold_date = Column(DateTime(timezone=True), nullable=False)
+    beds = Column(Integer, nullable=True)
+    baths = Column(Numeric(4, 1), nullable=True)
+    sqft = Column(Integer, nullable=True)
+    distance_miles = Column(Numeric(4, 2), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    deal = relationship("Deal", backref="comps")
+
+    def __repr__(self) -> str:
+        return f"<DealComp(id={self.id}, address={self.address})>"
+
+
+class DealPackage(Base):
+    __tablename__ = "deal_packages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False)
+    package_price = Column(Numeric(12, 2), nullable=False)
+    package_arv = Column(Numeric(12, 2), nullable=True)
+    floor_price = Column(Numeric(12, 2), nullable=False)
+    status = Column(Text, default="Active")
+    description = Column(Text, nullable=True)
+    expiry_date = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    items = relationship("DealPackageItem", back_populates="package", cascade="all, delete-orphan")
+
+    def __repr__(self) -> str:
+        return f"<DealPackage(id={self.id}, name={self.name})>"
+
+
+class DealPackageItem(Base):
+    __tablename__ = "deal_package_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    package_id = Column(UUID(as_uuid=True), ForeignKey("deal_packages.id", ondelete="CASCADE"), nullable=False, index=True)
+    deal_id = Column(UUID(as_uuid=True), ForeignKey("deals.id"), nullable=False)
+    individual_asking_price = Column(Numeric(12, 2), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("package_id", "deal_id", name="uq_package_item"),
+    )
+
+    package = relationship("DealPackage", back_populates="items")
+    deal = relationship("Deal")
+
+    def __repr__(self) -> str:
+        return f"<DealPackageItem(id={self.id}, package={self.package_id}, deal={self.deal_id})>"
 
 
 class AppState(Base):

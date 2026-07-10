@@ -225,6 +225,34 @@ async def process_conversation(
             "title_company": campaign.buyer_title_company or just_collected["title_company"],
             "agreed_price": campaign.agreed_price or just_collected["agreed_price"],
         }
+
+        # ── Below-floor counter escalation ────────────────────────────────
+        # If the buyer suggested a price below the floor, escalate to operator
+        # instead of auto-proceeding. The operator can accept, reject, or counter.
+        _counter_price = will_have["agreed_price"]
+        _negotiation_escalation = None
+        if _counter_price is not None and deal.floor_price is not None:
+            try:
+                cp = float(_counter_price)
+                fp = float(deal.floor_price)
+                if cp < fp:
+                    _negotiation_escalation = {
+                        "counter_price": cp,
+                        "floor_price": fp,
+                        "gap": fp - cp,
+                        "buyer_name": buyer.full_name,
+                        "buyer_email": buyer.email,
+                        "deal_address": deal.address,
+                        "deal_id": str(deal.id),
+                        "buyer_id": str(buyer.id),
+                        "campaign_id": str(campaign.id),
+                    }
+                    logger.info(
+                        "Negotiation escalation: buyer %s counter $%.0f < floor $%.0f (gap $%.0f)",
+                        buyer.id, cp, fp, fp - cp,
+                    )
+            except (ValueError, TypeError) as e:
+                logger.warning("Failed to parse counter/floor price: %s", e)
         all_pieces_complete = all(will_have.values())
 
         _still_missing = [k for k, v in will_have.items() if not v]
@@ -263,6 +291,19 @@ async def process_conversation(
             next_message = (
                 "Perfect — that's everything I need. I'll get the paperwork started "
                 "and send the contract over shortly."
+            )
+
+        # ── Below-floor escalation overrides all stage transitions ──
+        # When the buyer's counter is below floor, force negotiating stage,
+        # suppress any automated reply, and flag for operator decision.
+        if _negotiation_escalation:
+            new_stage = "negotiating"
+            next_message = ""  # No auto-reply — wait for operator
+            logger.info(
+                "Conversation engine: forced stage=negotiating for buyer %s "
+                "(counter $%.0f < floor $%.0f)",
+                buyer.id, _negotiation_escalation["counter_price"],
+                _negotiation_escalation["floor_price"],
             )
 
         # Anti-echo guard: if the model parroted the buyer's message, suppress it.
@@ -311,6 +352,7 @@ async def process_conversation(
             "contract_ready": new_stage == "contract_ready",
             "pass_detected": pass_detected,
             "unsubscribe_detected": unsubscribe_detected,
+            "negotiation_escalation": _negotiation_escalation,
             "extracted_info": {
                 "legal_name": parsed.get("extracted_legal_name"),
                 "phone": parsed.get("extracted_phone"),
@@ -338,6 +380,7 @@ def _fallback(stage: str) -> dict:
         "contract_ready": False,
         "pass_detected": False,
         "unsubscribe_detected": False,
+        "negotiation_escalation": None,
         "extracted_info": {
             "legal_name": None, "phone": None,
             "title_company": None, "agreed_price": None,

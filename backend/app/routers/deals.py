@@ -11,11 +11,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.models import ActivityLog, Buyer, Campaign, Deal, JVPartner
+from app.models.models import ActivityLog, Buyer, Campaign, Deal, DealComp, JVPartner
 from app.services.groq_client import groq_chat_completion
 from app.schemas import (
     CloseDealRequest,
     CloseDealResponse,
+    DealCompCreate,
+    DealCompResponse,
     DealCreate,
     DealResponse,
     DealUpdate,
@@ -304,6 +306,93 @@ async def deal_pipeline(
     )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Comparable Sales (Comps) endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{deal_id}/comps", response_model=List[DealCompResponse])
+async def list_comps(
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all comps for a deal, ordered by sold_date DESC."""
+    result = await db.execute(
+        select(DealComp)
+        .where(DealComp.deal_id == deal_id)
+        .order_by(DealComp.sold_date.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/{deal_id}/comps", response_model=DealCompResponse, status_code=status.HTTP_201_CREATED)
+async def add_comp(
+    deal_id: uuid.UUID,
+    comp_in: DealCompCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a comparable sale to a deal. Max 5 comps per deal."""
+    # Verify deal exists
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deal with id '{deal_id}' not found",
+        )
+
+    # Check max 5 comps
+    count_result = await db.execute(
+        select(DealComp).where(DealComp.deal_id == deal_id)
+    )
+    existing = count_result.scalars().all()
+    if len(existing) >= 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum 5 comps per deal reached",
+        )
+
+    comp = DealComp(
+        deal_id=deal_id,
+        address=comp_in.address,
+        sold_price=comp_in.sold_price,
+        sold_date=comp_in.sold_date,
+        beds=comp_in.beds,
+        baths=comp_in.baths,
+        sqft=comp_in.sqft,
+        distance_miles=comp_in.distance_miles,
+        notes=comp_in.notes,
+    )
+    db.add(comp)
+    await db.commit()
+    await db.refresh(comp)
+    return comp
+
+
+@router.delete("/{deal_id}/comps/{comp_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comp(
+    deal_id: uuid.UUID,
+    comp_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a comp. Verifies it belongs to the given deal."""
+    result = await db.execute(
+        select(DealComp).where(
+            DealComp.id == comp_id,
+            DealComp.deal_id == deal_id,
+        )
+    )
+    comp = result.scalar_one_or_none()
+    if not comp:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comp not found",
+        )
+    await db.delete(comp)
+    await db.commit()
+    return None
 
 
 @router.get("/{deal_id}", response_model=DealResponse)

@@ -7,7 +7,8 @@ import { apiFetch } from "@/lib/api";
 import {
   ArrowLeft, Building2, DollarSign, Wrench, TrendingUp,
   Users, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp,
-  Plus, X, AlertCircle, MessageSquare, Send, CheckCircle
+  Plus, X, AlertCircle, MessageSquare, Send, CheckCircle,
+  PauseCircle, Play, Calendar, Home, MapPin
 } from "lucide-react";
 
 interface Deal {
@@ -35,6 +36,21 @@ interface Deal {
   my_payout: number | null;
   jv_payout: number | null;
   pass_count: number | null;
+  expiry_date: string | null;
+  created_at: string;
+}
+
+interface DealComp {
+  id: string;
+  deal_id: string;
+  address: string;
+  sold_price: number;
+  sold_date: string;
+  beds: number | null;
+  baths: number | null;
+  sqft: number | null;
+  distance_miles: number | null;
+  notes: string | null;
   created_at: string;
 }
 
@@ -108,6 +124,8 @@ const dealStatusConfig: Record<string, { dot: string; label: string }> = {
   "Campaign Launched": { dot: "bg-blue-400", label: "Campaign Launched" },
   "Under Contract": { dot: "bg-purple-400", label: "Under Contract" },
   Closed: { dot: "bg-slate-400", label: "Closed" },
+  Paused: { dot: "bg-amber-400", label: "Paused" },
+  Expired: { dot: "bg-red-400", label: "Expired" },
 };
 
 export default function DealDetailPage() {
@@ -127,6 +145,23 @@ export default function DealDetailPage() {
   const [replySending, setReplySending] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [replySuccess, setReplySuccess] = useState<string | null>(null);
+  // Comps state
+  const [comps, setComps] = useState<DealComp[]>([]);
+  const [newComp, setNewComp] = useState({
+    address: "", sold_price: "", sold_date: "",
+    beds: "", baths: "", sqft: "", distance_miles: "", notes: ""
+  });
+  const [compAdding, setCompAdding] = useState(false);
+  const [showCompForm, setShowCompForm] = useState(false);
+
+  // Pause/Resume state
+  const [pausing, setPausing] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [pauseReason, setPauseReason] = useState("");
+  // Expiry date state
+  const [expiryDate, setExpiryDate] = useState<string>("");
+  const [expirySaving, setExpirySaving] = useState(false);
+  const [showExpiryInput, setShowExpiryInput] = useState(false);
 
   const [showTCForm, setShowTCForm] = useState(false);
   const [tcSaving, setTcSaving] = useState(false);
@@ -160,6 +195,12 @@ export default function DealDetailPage() {
           const tcs = await apiFetch<TitleCompany[]>(`/api/title-companies/${dealId}`);
           if (tcs.length > 0) setTitleCompany(tcs[0]);
         } catch {}
+
+        // Load comps
+        try {
+          const compsData = await apiFetch<DealComp[]>(`/api/deals/${dealId}/comps`);
+          setComps(compsData);
+        } catch {}
       } catch (e) {
         setError(String(e));
       } finally {
@@ -168,6 +209,62 @@ export default function DealDetailPage() {
     }
     load();
   }, [dealId]);
+
+  async function handlePause() {
+    setPausing(true);
+    try {
+      await apiFetch(`/api/campaigns/${dealId}/pause`, {
+        method: "POST",
+        body: JSON.stringify({ reason: pauseReason || "manual_pause" }),
+      });
+      // Refresh deal data
+      const updated = await apiFetch<Deal>(`/api/deals/${dealId}`);
+      setDeal(updated);
+      setPauseReason("");
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setPausing(false);
+    }
+  }
+
+  async function handleSaveExpiryDate() {
+    setExpirySaving(true);
+    try {
+      const payload: Record<string, unknown> = {};
+      if (expiryDate) {
+        payload.expiry_date = new Date(expiryDate).toISOString();
+      } else {
+        payload.expiry_date = null;
+      }
+      await apiFetch(`/api/deals/${dealId}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      const updated = await apiFetch<Deal>(`/api/deals/${dealId}`);
+      setDeal(updated);
+      setShowExpiryInput(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setExpirySaving(false);
+    }
+  }
+
+  async function handleResume() {
+    setResuming(true);
+    try {
+      await apiFetch(`/api/campaigns/${dealId}/resume`, {
+        method: "POST",
+      });
+      const updated = await apiFetch<Deal>(`/api/deals/${dealId}`);
+      setDeal(updated);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setResuming(false);
+    }
+  }
 
   async function sendManualReply() {
     if (!replyTarget || !replyMessage.trim()) return;
@@ -261,6 +358,40 @@ export default function DealDetailPage() {
               <span className={`w-2 h-2 rounded-full ${statusConf.dot}`} />
               {statusConf.label}
             </span>
+            {/* Pause/Resume buttons */}
+            {(deal.status === "Campaign Launched" || deal.status === "Available") && (
+              <div className="flex items-center gap-2 mt-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Reason (optional)"
+                    value={pauseReason}
+                    onChange={(e) => setPauseReason(e.target.value)}
+                    className="w-36 px-2 py-1 rounded-md border border-slate-700 bg-slate-800/50 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-amber-500/50 transition-colors"
+                  />
+                  <button
+                    onClick={handlePause}
+                    disabled={pausing}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-colors disabled:opacity-50"
+                  >
+                    <PauseCircle className="w-3.5 h-3.5" />
+                    {pausing ? "Pausing..." : "Pause Campaign"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {deal.status === "Paused" && (
+              <div className="flex items-center gap-2 mt-2">
+                <button
+                  onClick={handleResume}
+                  disabled={resuming}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors disabled:opacity-50"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  {resuming ? "Resuming..." : "Resume Campaign"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -328,6 +459,195 @@ export default function DealDetailPage() {
             <p className="text-sm text-slate-300">{deal.condition_description}</p>
           </div>
         )}
+
+        {/* Expiry Date */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-slate-500 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5" />
+              Expiry Date
+            </p>
+            <button
+              onClick={() => {
+                setExpiryDate(deal.expiry_date ? new Date(deal.expiry_date).toISOString().slice(0, 16) : "");
+                setShowExpiryInput(!showExpiryInput);
+              }}
+              className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              {showExpiryInput ? "Cancel" : (deal.expiry_date ? "Edit" : "Set Date")}
+            </button>
+          </div>
+          {showExpiryInput ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="datetime-local"
+                value={expiryDate}
+                onChange={(e) => setExpiryDate(e.target.value)}
+                className="flex-1 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800/50 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50 transition-colors"
+              />
+              <button
+                onClick={handleSaveExpiryDate}
+                disabled={expirySaving}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 transition-colors disabled:opacity-50"
+              >
+                {expirySaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          ) : (
+            <p className={`text-sm ${deal.expiry_date ? "text-slate-300" : "text-slate-500 italic"}`}>
+              {deal.expiry_date ? new Date(deal.expiry_date).toLocaleDateString("en-US", {
+                month: "short", day: "numeric", year: "numeric",
+                hour: "2-digit", minute: "2-digit",
+              }) : "No expiry date set"}
+            </p>
+          )}
+        </div>
+
+        {/* Expiry Warning Banner */}
+        {deal.expiry_date && (() => {
+          const now = new Date();
+          const expiry = new Date(deal.expiry_date);
+          const daysUntil = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          if (daysUntil <= 3 && daysUntil >= 0) {
+            return (
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>
+                  This deal expires in <strong>{daysUntil === 0 ? "less than a day" : `${daysUntil} days`}</strong>
+                  {daysUntil <= 0 ? " — campaigns will auto-stop." : " — review before expiry."}
+                </span>
+              </div>
+            );
+          }
+          if (daysUntil < 0) {
+            return (
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+                <XCircle className="w-4 h-4 shrink-0" />
+                <span>
+                  This deal expired <strong>{Math.abs(daysUntil)} days ago</strong>. Campaigns will be auto-stopped.
+                </span>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
+        {/* Comparable Sales */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-slate-200 flex items-center gap-2">
+              <MapPin className="w-3.5 h-3.5 text-slate-400" />
+              Comparable Sales ({comps.length}/5)
+            </h2>
+            {comps.length < 5 && !showCompForm && (
+              <button onClick={() => setShowCompForm(true)}
+                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors">
+                <Plus className="w-3.5 h-3.5" /> Add Comp
+              </button>
+            )}
+          </div>
+
+          {/* Add Comp Form */}
+          {showCompForm && (
+            <div className="mb-4 p-3 rounded-lg bg-slate-800/50 border border-slate-700 space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { key: "address", label: "Address *", type: "text", colSpan: 2 },
+                  { key: "sold_price", label: "Sold Price ($) *", type: "number" },
+                  { key: "sold_date", label: "Sold Date *", type: "date" },
+                  { key: "beds", label: "Beds", type: "number" },
+                  { key: "baths", label: "Baths", type: "number" },
+                  { key: "sqft", label: "Sqft", type: "number" },
+                  { key: "distance_miles", label: "Distance (mi)", type: "number" },
+                  { key: "notes", label: "Notes", type: "text", colSpan: 2 },
+                ].map(({ key, label, type, colSpan }) => (
+                  <div key={key} className={colSpan === 2 ? "col-span-2" : ""}>
+                    <label className="block text-xs text-slate-500 mb-0.5">{label}</label>
+                    <input
+                      type={type}
+                      value={(newComp as any)[key]}
+                      onChange={e => setNewComp(prev => ({ ...prev, [key]: e.target.value }))}
+                      className="w-full px-2 py-1.5 rounded-md border border-slate-700 bg-slate-800/50 text-xs text-slate-200 focus:outline-none focus:border-blue-500/50 transition-colors"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={async () => {
+                    if (!newComp.address || !newComp.sold_price || !newComp.sold_date) return;
+                    setCompAdding(true);
+                    try {
+                      const payload: Record<string, unknown> = {
+                        address: newComp.address,
+                        sold_price: parseFloat(newComp.sold_price),
+                        sold_date: newComp.sold_date,
+                      };
+                      if (newComp.beds) payload.beds = parseInt(newComp.beds);
+                      if (newComp.baths) payload.baths = parseFloat(newComp.baths);
+                      if (newComp.sqft) payload.sqft = parseInt(newComp.sqft);
+                      if (newComp.distance_miles) payload.distance_miles = parseFloat(newComp.distance_miles);
+                      if (newComp.notes) payload.notes = newComp.notes;
+                      const added = await apiFetch<DealComp>(`/api/deals/${dealId}/comps`, {
+                        method: "POST",
+                        body: JSON.stringify(payload),
+                      });
+                      setComps(prev => [...prev, added]);
+                      setNewComp({ address: "", sold_price: "", sold_date: "", beds: "", baths: "", sqft: "", distance_miles: "", notes: "" });
+                      setShowCompForm(false);
+                    } catch (e: any) {
+                      console.error(e);
+                    } finally {
+                      setCompAdding(false);
+                    }
+                  }}
+                  disabled={compAdding || !newComp.address || !newComp.sold_price || !newComp.sold_date}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 transition-colors disabled:opacity-50"
+                >
+                  {compAdding ? "Adding..." : "Add"}
+                </button>
+                <button onClick={() => setShowCompForm(false)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 transition-colors">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Comp Cards */}
+          {comps.length === 0 ? (
+            <p className="text-sm text-slate-500 italic">No comparable sales added yet. Add comps to help the AI reference real market data in emails.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {comps.map(c => (
+                <div key={c.id} className="p-3 rounded-lg bg-slate-800/30 border border-slate-700/50 relative group">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await apiFetch(`/api/deals/${dealId}/comps/${c.id}`, { method: "DELETE" });
+                        setComps(prev => prev.filter(x => x.id !== c.id));
+                      } catch (e) { console.error(e); }
+                    }}
+                    className="absolute top-2 right-2 p-1 rounded-md text-slate-600 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Delete comp"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <p className="text-sm font-medium text-slate-200 pr-6">{c.address}</p>
+                  <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-400">
+                    <span className="text-emerald-400 font-semibold">${c.sold_price.toLocaleString()}</span>
+                    <span>{new Date(c.sold_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+                    {c.beds && <span>{c.beds}bd</span>}
+                    {c.baths && <span>{c.baths}ba</span>}
+                    {c.sqft && <span>{c.sqft.toLocaleString()}sqft</span>}
+                    {c.distance_miles && <span>{c.distance_miles}mi</span>}
+                  </div>
+                  {c.notes && <p className="text-xs text-slate-500 mt-1">{c.notes}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Campaign Stats */}
         <div className="grid grid-cols-4 gap-3">

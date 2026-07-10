@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useCallback } from "react";
-import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight, AlertTriangle, FileText, Kanban, Ban } from "lucide-react";
+import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight, AlertTriangle, FileText, Kanban, Ban, Bell, Package } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -12,9 +12,11 @@ const navItems = [
   { href: "/buyers", label: "Buyers", icon: Users },
   { href: "/opt-out", label: "Opt-Out List", icon: Ban },
   { href: "/deals", label: "Deals", icon: Building2 },
+  { href: "/packages", label: "Packages", icon: Package },
   { href: "/jv-partners", label: "JV Partners", icon: Activity },
   { href: "/campaigns", label: "Campaigns", icon: Send },
   { href: "/contracts", label: "Contracts", icon: FileText },
+  { href: "/alerts", label: "Alerts", icon: Bell },
   { href: "/failed-sends", label: "Failed Sends", icon: AlertTriangle },
 ];
 
@@ -22,6 +24,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const [failedCount, setFailedCount] = useState<number | null>(null);
   const [contractCount, setContractCount] = useState<number | null>(null);
+  const [negotiationCount, setNegotiationCount] = useState<number | null>(null);
 
   // Fetch unresolved failed campaign count
   const fetchFailedCount = useCallback(async () => {
@@ -35,6 +38,21 @@ export default function Sidebar() {
       }
     } catch {
       // Silently fail — don't break the sidebar
+    }
+  }, []);
+
+  // Fetch unresolved negotiation alert count
+  const fetchNegotiationCount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/alerts/negotiation");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setNegotiationCount(data.filter((a: any) => !a.resolved).length);
+        }
+      }
+    } catch {
+      // Silently fail
     }
   }, []);
 
@@ -55,6 +73,7 @@ export default function Sidebar() {
 
   useEffect(() => {
     fetchFailedCount();
+    fetchNegotiationCount();
     fetchContractCount();
     // Refresh every 60s
     const interval = setInterval(() => {
@@ -100,6 +119,11 @@ export default function Sidebar() {
                 isActive ? "" : "group-hover:scale-110"
               }`} />
               <span>{item.label}</span>
+              {item.href === "/alerts" && negotiationCount !== null && negotiationCount > 0 && (
+                <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white bg-amber-500 shadow-sm shadow-amber-500/50">
+                  {negotiationCount > 99 ? "99+" : negotiationCount}
+                </span>
+              )}
               {item.href === "/contracts" && contractCount !== null && contractCount > 0 && (
                 <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white bg-amber-500 shadow-sm shadow-amber-500/50">
                   {contractCount > 99 ? "99+" : contractCount}
@@ -110,13 +134,16 @@ export default function Sidebar() {
                   {failedCount > 99 ? "99+" : failedCount}
                 </span>
               )}
-              {isActive && item.href !== "/failed-sends" && item.href !== "/contracts" && (
+              {isActive && item.href !== "/failed-sends" && item.href !== "/contracts" && item.href !== "/alerts" && (
                 <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
               )}
               {isActive && item.href === "/failed-sends" && !(failedCount !== null && failedCount > 0) && (
                 <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
               )}
               {isActive && item.href === "/contracts" && !(contractCount !== null && contractCount > 0) && (
+                <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
+              )}
+              {isActive && item.href === "/alerts" && !(negotiationCount !== null && negotiationCount > 0) && (
                 <ChevronRight className="w-3.5 h-3.5 ml-auto text-blue-400/50" />
               )}
             </Link>

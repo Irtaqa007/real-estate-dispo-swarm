@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Campaign, Deal, QueuedDealMatch
+from app.models.models import Campaign, Deal, DealComp, QueuedDealMatch
 from app.services.email_generator import generate_touch_email, TOUCH_CONFIGS
 from app.services.ai_validator import ValidationResult, validate_ai_output
 from app.services.gmail_service import send_email
@@ -153,6 +153,23 @@ async def launch_campaign_for_buyer(
         )
         return result
 
+    # ── Fetch comps for this deal ──
+    comps_result = await db.execute(
+        select(DealComp).where(DealComp.deal_id == deal_id)
+        .order_by(DealComp.sold_date.desc())
+    )
+    comps_list = [
+        {
+            "address": c.address,
+            "sold_price": float(c.sold_price),
+            "sold_date": c.sold_date.strftime("%B %Y") if hasattr(c.sold_date, 'strftime') else str(c.sold_date),
+            "beds": c.beds,
+            "baths": float(c.baths) if c.baths else None,
+            "sqft": c.sqft,
+        }
+        for c in comps_result.scalars().all()
+    ]
+
     # ── Generate 6-touch campaign ──
     launch_time = datetime.now(timezone.utc)
     buyer_tier = buyer.buyer_tier or "C-List"
@@ -191,6 +208,7 @@ async def launch_campaign_for_buyer(
             price_min=float(buyer.price_min) if buyer.price_min else None,
             price_max=float(buyer.price_max) if buyer.price_max else None,
             pref_cities=buyer.pref_cities,
+            comps=comps_list if comps_list else None,
         )
 
         # Skip touch if Groq failed — never send fallback garbage
@@ -304,3 +322,118 @@ async def launch_campaign_for_buyer(
     )
 
     return result
+
+
+async def launch_package_campaign(
+    db: AsyncSession,
+    package,
+    deals: list,
+    matched_buyers: list[dict],
+    total_individual: float = 0,
+    savings: float = 0,
+    total_profit: float = 0,
+) -> dict:
+    """Launch package campaigns for matched buyers.
+
+    Creates 4 package-touch campaigns for each matched buyer with optimized
+    scheduling (faster arc than single-deal campaigns).
+
+    Returns:
+        dict with keys: campaigns_created, errors.
+    """
+    from app.services.email_generator import generate_package_email
+    from app.services.gmail_service import send_email
+
+    launch_time = datetime.now(timezone.utc)
+    campaigns_created = 0
+    errors = []
+
+    # Package touch config: faster arc
+    package_touches = [
+        {"touch": 1, "delay_days": 0},
+        {"touch": 2, "delay_days": 2},
+        {"touch": 3, "delay_days": 5},
+        {"touch": 4, "delay_days": 10},
+    ]
+
+    package_price = float(package.package_price)
+    package_arv = float(package.package_arv) if package.package_arv else 0
+
+    for buyer_info in matched_buyers:
+        buyer_id = buyer_info["id"]
+        for config in package_touches:
+            touch_num = config["touch"]
+
+            try:
+                email_data = await generate_package_email(
+                    package=package,
+                    deals=deals,
+                    buyer_name=buyer_info["full_name"],
+                    buyer_email=buyer_info["email"],
+                    buy_box=buyer_info["buy_box"],
+                    buyer_tier=buyer_info["buyer_tier"],
+                    touch=touch_num,
+                    package_price=package_price,
+                    package_arv=package_arv,
+                    total_individual=total_individual,
+                    savings=savings,
+                    total_profit=total_profit,
+                )
+
+                if email_data.get("status") == "Failed":
+                    logger.warning("Package touch %d failed for buyer %s", touch_num, buyer_id)
+                    continue
+
+                scheduled_send = None
+                if touch_num == 1:
+                    touch_status = "Sent"
+                    # Send immediately
+                    try:
+                        await send_email(
+                            to=buyer_info["email"],
+                            subject=email_data.get("subject", ""),
+                            body=email_data.get("body", ""),
+                            send_type="campaign",
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to auto-send package touch 1: %s", e)
+                        touch_status = "Queued"
+                        scheduled_send = launch_time + timedelta(hours=1)
+                else:
+                    touch_status = "Queued"
+                    scheduled_send = launch_time + timedelta(days=config["delay_days"])
+
+                # Create Campaign record for each deal in the package
+                for deal_obj in deals:
+                    jitter_hours = random.uniform(-2, 3) if touch_status == "Queued" else 0
+                    jittered = None
+                    if scheduled_send:
+                        jittered = scheduled_send + timedelta(hours=jitter_hours)
+
+                    campaign = Campaign(
+                        id=uuid.uuid4(),
+                        deal_id=deal_obj.id,
+                        buyer_id=buyer_id,
+                        touch_number=touch_num,
+                        status=touch_status,
+                        subject=email_data.get("subject", ""),
+                        body=email_data.get("body", ""),
+                        scheduled_send_at=jittered,
+                        package_id=package.id,
+                    )
+                    db.add(campaign)
+                    campaigns_created += 1
+
+            except Exception as e:
+                logger.error("Package campaign error for buyer %s, touch %d: %s", buyer_id, touch_num, e, exc_info=True)
+                errors.append({"buyer_id": str(buyer_id), "touch": touch_num, "error": str(e)[:200]})
+
+    logger.info(
+        "Package campaigns created: %d campaigns for %d buyers on %d deals",
+        campaigns_created, len(matched_buyers), len(deals),
+    )
+
+    return {
+        "campaigns_created": campaigns_created,
+        "errors": errors,
+    }

@@ -507,6 +507,36 @@ async def process_buyer_replies() -> int:
                         except Exception as e:
                             logger.warning("Failed to parse agreed_price for campaign %s: %s", campaign.id, e)
 
+                    # ── Negotiation escalation: below-floor counter ──
+                    _negotiation_escalation = conv_result.get("negotiation_escalation")
+                    if _negotiation_escalation:
+                        campaign.status = "Replied"
+                        # Create ActivityLog for operator review
+                        db.add(ActivityLog(
+                            id=uuid.uuid4(),
+                            entity_type="deal",
+                            entity_id=campaign.deal_id,
+                            action="negotiation_escalation",
+                            metadata_json={
+                                "alert_user": True,
+                                "priority": "high",
+                                "action_required": "Review and respond to below-floor counter",
+                                "buyer_id": str(buyer_id),
+                                "deal_id": str(campaign.deal_id),
+                                "campaign_id": str(campaign.id),
+                                "counter_price": _negotiation_escalation["counter_price"],
+                                "floor_price": _negotiation_escalation["floor_price"],
+                                "gap": _negotiation_escalation["gap"],
+                                "buyer_name": _negotiation_escalation.get("buyer_name", buyer_obj.full_name if buyer_obj else ""),
+                                "buyer_email": _negotiation_escalation.get("buyer_email", buyer_obj.email if buyer_obj else ""),
+                                "deal_address": _negotiation_escalation.get("deal_address", deal_obj.address if deal_obj else ""),
+                            },
+                        ))
+                        logger.info(
+                            "Negotiation escalation logged for buyer %s on deal %s (counter < floor)",
+                            buyer_id, campaign.deal_id,
+                        )
+
                     # Handle terminal states
                     if conv_result["pass_detected"] or conv_result["unsubscribe_detected"]:
                         campaign.status = "Passed"
@@ -1022,6 +1052,132 @@ async def send_ghost_recovery_emails() -> int:
 # ---------------------------------------------------------------------------
 # Buyer re-engagement scheduler (daily)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Auto-stop triggers — pause campaigns when deal conditions change
+# ---------------------------------------------------------------------------
+
+
+async def check_deal_auto_stops() -> int:
+    """Check all active deals for auto-stop conditions and pause campaigns.
+
+    Three triggers:
+    a) Deal Closed/Paid: if deal.status == 'Closed' or deal.payment_confirmed == True
+       → pause all Queued campaigns
+    b) Expired: if deal.expiry_date IS NOT NULL and deal.expiry_date < now()
+       → set deal.status = 'Expired', pause all Queued campaigns
+    c) Deal Fell Through: if deal.status == 'Deal_Fell_Through'
+       → pause all Queued campaigns
+
+    Returns:
+        Number of deals affected.
+    """
+    async with _db.async_session_factory() as db:
+        try:
+            now = datetime.now(timezone.utc)
+            affected_count = 0
+
+            # Find all deals with active campaigns (Queued status)
+            result = await db.execute(
+                select(Deal).where(
+                    Deal.status.in_([
+                        "Available", "Campaign Launched", "Under Contract",
+                    ])
+                )
+            )
+            active_deals = result.scalars().all()
+
+            for deal in active_deals:
+                try:
+                    triggered = False
+                    action = None
+                    reason = None
+
+                    # a) Closed or payment confirmed
+                    if deal.status == "Closed" or deal.payment_confirmed:
+                        triggered = True
+                        action = "auto_paused_deal_closed"
+                        reason = "deal closed or payment confirmed"
+
+                    # b) Expiry date passed
+                    elif deal.expiry_date and deal.expiry_date < now:
+                        triggered = True
+                        action = "auto_paused_deal_expired"
+                        reason = "deal expired"
+                        deal.status = "Expired"
+                        db.add(deal)
+
+                    # c) Deal Fell Through / Dead
+                    elif deal.status in ("Dead", "Deal_Fell_Through"):
+                        triggered = True
+                        action = "auto_paused_deal_fell_through"
+                        reason = "deal fell through or marked dead"
+
+                    if not triggered:
+                        continue
+
+                    # Pause all Queued campaigns for this deal
+                    camp_result = await db.execute(
+                        select(Campaign).where(
+                            Campaign.deal_id == deal.id,
+                            Campaign.status == "Queued",
+                        )
+                    )
+                    queued_camps = camp_result.scalars().all()
+
+                    paused_count = 0
+                    for c in queued_camps:
+                        c.status = "Paused"
+                        db.add(c)
+                        paused_count += 1
+
+                    if paused_count == 0:
+                        continue
+
+                    # Log to activity_log
+                    log_entry = ActivityLog(
+                        id=uuid.uuid4(),
+                        entity_type="deal",
+                        entity_id=deal.id,
+                        action=action,
+                        metadata_json={
+                            "paused_count": paused_count,
+                            "reason": reason,
+                            "deal_address": deal.address,
+                            "deal_status": deal.status,
+                            "expiry_date": deal.expiry_date.isoformat() if deal.expiry_date else None,
+                        },
+                    )
+                    db.add(log_entry)
+
+                    await db.commit()
+                    affected_count += 1
+
+                    logger.info(
+                        "Auto-stop triggered for deal %s (%s): %s — paused %d campaigns",
+                        deal.id, deal.address, action, paused_count,
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        "Auto-stop check failed for deal %s: %s",
+                        deal.id, e, exc_info=True,
+                    )
+                    await db.rollback()
+                    continue
+
+            if affected_count:
+                logger.info(
+                    "Auto-stop check complete: %d deal(s) affected",
+                    affected_count,
+                )
+            return affected_count
+
+        except Exception as e:
+            logger.error("Auto-stop check failed: %s", e, exc_info=True)
+            await db.rollback()
+            return 0
 
 
 async def fire_buyer_reengagements() -> int:
@@ -1596,6 +1752,14 @@ async def _scheduler_loop() -> None:
                     except Exception as e:
                         logger.error("Scheduler: buyer re-engagement failed: %s", e, exc_info=True)
 
+                async def _task_auto_stops() -> None:
+                    try:
+                        affected = await check_deal_auto_stops()
+                        if affected > 0:
+                            logger.info("Scheduler: auto-stopped %d deal(s)", affected)
+                    except Exception as e:
+                        logger.error("Scheduler: auto-stop check failed: %s", e, exc_info=True)
+
                 async def _task_title_chases() -> None:
                     try:
                         sent = await run_title_chases()
@@ -1612,6 +1776,7 @@ async def _scheduler_loop() -> None:
                     _task_auto_match(),
                     _task_ghost_recovery(),
                     _task_reengagement(),
+                    _task_auto_stops(),
                     _task_title_chases(),
                     return_exceptions=True,
                 )
