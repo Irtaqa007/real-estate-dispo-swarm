@@ -166,6 +166,93 @@ async def list_deals(
 
 
 # ---------------------------------------------------------------------------
+# Comparable Sales (Comps) endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{deal_id}/comps", response_model=List[DealCompResponse])
+async def list_comps(
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all comps for a deal, ordered by sold_date DESC."""
+    result = await db.execute(
+        select(DealComp)
+        .where(DealComp.deal_id == deal_id)
+        .order_by(DealComp.sold_date.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/{deal_id}/comps", response_model=DealCompResponse, status_code=status.HTTP_201_CREATED)
+async def add_comp(
+    deal_id: uuid.UUID,
+    comp_in: DealCompCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a comparable sale to a deal. Max 5 comps per deal."""
+    # Verify deal exists
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deal with id '{deal_id}' not found",
+        )
+
+    # Check max 5 comps
+    count_result = await db.execute(
+        select(DealComp).where(DealComp.deal_id == deal_id)
+    )
+    existing = count_result.scalars().all()
+    if len(existing) >= 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum 5 comps per deal reached",
+        )
+
+    comp = DealComp(
+        deal_id=deal_id,
+        address=comp_in.address,
+        sold_price=comp_in.sold_price,
+        sold_date=comp_in.sold_date,
+        beds=comp_in.beds,
+        baths=comp_in.baths,
+        sqft=comp_in.sqft,
+        distance_miles=comp_in.distance_miles,
+        notes=comp_in.notes,
+    )
+    db.add(comp)
+    await db.commit()
+    await db.refresh(comp)
+    return comp
+
+
+@router.delete("/{deal_id}/comps/{comp_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comp(
+    deal_id: uuid.UUID,
+    comp_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a comp. Verifies it belongs to the given deal."""
+    result = await db.execute(
+        select(DealComp).where(
+            DealComp.id == comp_id,
+            DealComp.deal_id == deal_id,
+        )
+    )
+    comp = result.scalar_one_or_none()
+    if not comp:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comp not found",
+        )
+    await db.delete(comp)
+    await db.commit()
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Pipeline endpoint — must come BEFORE /{deal_id} to avoid "pipeline" being
 # matched as a UUID path parameter
 # ---------------------------------------------------------------------------
@@ -309,90 +396,78 @@ async def deal_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Comparable Sales (Comps) endpoints
+# Revenue dashboard endpoint
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{deal_id}/comps", response_model=List[DealCompResponse])
-async def list_comps(
-    deal_id: uuid.UUID,
+@router.get("/dashboard/revenue", response_model=RevenueDashboardResponse)
+async def revenue_dashboard(
     db: AsyncSession = Depends(get_db),
 ):
-    """List all comps for a deal, ordered by sold_date DESC."""
+    """Get revenue dashboard data.
+
+    Returns all deals with Sold or Under Contract status (or payment_confirmed=True),
+    aggregated with confirmed vs pending payout totals.
+    """
     result = await db.execute(
-        select(DealComp)
-        .where(DealComp.deal_id == deal_id)
-        .order_by(DealComp.sold_date.desc())
-    )
-    return result.scalars().all()
-
-
-@router.post("/{deal_id}/comps", response_model=DealCompResponse, status_code=status.HTTP_201_CREATED)
-async def add_comp(
-    deal_id: uuid.UUID,
-    comp_in: DealCompCreate,
-    db: AsyncSession = Depends(get_db),
-):
-    """Add a comparable sale to a deal. Max 5 comps per deal."""
-    # Verify deal exists
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Deal with id '{deal_id}' not found",
+        select(Deal)
+        .where(
+            (Deal.status.in_(["Sold", "Under Contract"]))
+            | (Deal.payment_confirmed == True)
         )
-
-    # Check max 5 comps
-    count_result = await db.execute(
-        select(DealComp).where(DealComp.deal_id == deal_id)
+        .order_by(Deal.closed_at.desc().nullslast())
     )
-    existing = count_result.scalars().all()
-    if len(existing) >= 5:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum 5 comps per deal reached",
-        )
+    deals = result.scalars().all()
 
-    comp = DealComp(
-        deal_id=deal_id,
-        address=comp_in.address,
-        sold_price=comp_in.sold_price,
-        sold_date=comp_in.sold_date,
-        beds=comp_in.beds,
-        baths=comp_in.baths,
-        sqft=comp_in.sqft,
-        distance_miles=comp_in.distance_miles,
-        notes=comp_in.notes,
+    items = []
+    total_assignment_fees = 0.0
+    total_my_payout = 0.0
+    total_my_payout_confirmed = 0.0
+    total_my_payout_pending = 0.0
+
+    for deal in deals:
+        closed_price = float(deal.closed_price) if deal.closed_price else 0.0
+        net_spread = float(deal.net_spread) if deal.net_spread else 0.0
+        my_payout = float(deal.my_payout) if deal.my_payout else 0.0
+        payment_amount = float(deal.payment_amount) if deal.payment_amount else None
+
+        # Get JV partner name
+        jv_name = None
+        if deal.jv_partner_id:
+            jv = await db.get(JVPartner, deal.jv_partner_id)
+            if jv:
+                jv_name = jv.name
+
+        total_assignment_fees += net_spread
+        total_my_payout += my_payout
+
+        if deal.payment_confirmed:
+            total_my_payout_confirmed += payment_amount or my_payout
+        elif deal.status == "Sold":
+            total_my_payout_pending += my_payout
+
+        items.append(RevenueDealItem(
+            deal_id=deal.id,
+            address=deal.address,
+            closed_at=deal.closed_at,
+            closed_price=closed_price,
+            net_spread=net_spread,
+            my_payout=my_payout,
+            payment_confirmed=deal.payment_confirmed or False,
+            payment_confirmed_at=deal.payment_confirmed_at,
+            payment_amount=payment_amount,
+            jv_partner_name=jv_name,
+            status=deal.status,
+        ))
+
+    return RevenueDashboardResponse(
+        total_deals_closed=len(items),
+        total_assignment_fees=round(total_assignment_fees, 2),
+        total_my_payout=round(total_my_payout, 2),
+        total_my_payout_confirmed=round(total_my_payout_confirmed, 2),
+        total_my_payout_pending=round(total_my_payout_pending, 2),
+        deals=items,
     )
-    db.add(comp)
-    await db.commit()
-    await db.refresh(comp)
-    return comp
-
-
-@router.delete("/{deal_id}/comps/{comp_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_comp(
-    deal_id: uuid.UUID,
-    comp_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """Delete a comp. Verifies it belongs to the given deal."""
-    result = await db.execute(
-        select(DealComp).where(
-            DealComp.id == comp_id,
-            DealComp.deal_id == deal_id,
-        )
-    )
-    comp = result.scalar_one_or_none()
-    if not comp:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Comp not found",
-        )
-    await db.delete(comp)
-    await db.commit()
-    return None
 
 
 @router.get("/{deal_id}", response_model=DealResponse)
@@ -1039,79 +1114,7 @@ async def mark_deal_paid(
     )
 
 
-# ---------------------------------------------------------------------------
-# Revenue dashboard endpoint
-# ---------------------------------------------------------------------------
 
-
-@router.get("/dashboard/revenue", response_model=RevenueDashboardResponse)
-async def revenue_dashboard(
-    db: AsyncSession = Depends(get_db),
-):
-    """Get revenue dashboard data.
-
-    Returns all deals with Sold or Under Contract status (or payment_confirmed=True),
-    aggregated with confirmed vs pending payout totals.
-    """
-    result = await db.execute(
-        select(Deal)
-        .where(
-            (Deal.status.in_(["Sold", "Under Contract"]))
-            | (Deal.payment_confirmed == True)
-        )
-        .order_by(Deal.closed_at.desc().nullslast())
-    )
-    deals = result.scalars().all()
-
-    items = []
-    total_assignment_fees = 0.0
-    total_my_payout = 0.0
-    total_my_payout_confirmed = 0.0
-    total_my_payout_pending = 0.0
-
-    for deal in deals:
-        closed_price = float(deal.closed_price) if deal.closed_price else 0.0
-        net_spread = float(deal.net_spread) if deal.net_spread else 0.0
-        my_payout = float(deal.my_payout) if deal.my_payout else 0.0
-        payment_amount = float(deal.payment_amount) if deal.payment_amount else None
-
-        # Get JV partner name
-        jv_name = None
-        if deal.jv_partner_id:
-            jv = await db.get(JVPartner, deal.jv_partner_id)
-            if jv:
-                jv_name = jv.name
-
-        total_assignment_fees += net_spread
-        total_my_payout += my_payout
-
-        if deal.payment_confirmed:
-            total_my_payout_confirmed += payment_amount or my_payout
-        elif deal.status == "Sold":
-            total_my_payout_pending += my_payout
-
-        items.append(RevenueDealItem(
-            deal_id=deal.id,
-            address=deal.address,
-            closed_at=deal.closed_at,
-            closed_price=closed_price,
-            net_spread=net_spread,
-            my_payout=my_payout,
-            payment_confirmed=deal.payment_confirmed or False,
-            payment_confirmed_at=deal.payment_confirmed_at,
-            payment_amount=payment_amount,
-            jv_partner_name=jv_name,
-            status=deal.status,
-        ))
-
-    return RevenueDashboardResponse(
-        total_deals_closed=len(items),
-        total_assignment_fees=round(total_assignment_fees, 2),
-        total_my_payout=round(total_my_payout, 2),
-        total_my_payout_confirmed=round(total_my_payout_confirmed, 2),
-        total_my_payout_pending=round(total_my_payout_pending, 2),
-        deals=items,
-    )
 
 
 # ---------------------------------------------------------------------------
