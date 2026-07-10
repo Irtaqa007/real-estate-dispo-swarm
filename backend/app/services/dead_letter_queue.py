@@ -6,7 +6,6 @@ allows re-attempting delivery of failed campaigns.
 """
 
 import logging
-import smtplib
 import uuid
 from datetime import datetime, timezone
 from typing import Optional

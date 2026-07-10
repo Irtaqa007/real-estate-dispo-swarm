@@ -10,10 +10,9 @@ import email
 import imaplib
 import json
 import logging
-import re
 import uuid
 from datetime import datetime, timezone
-from email.header import decode_header
+
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,6 +25,7 @@ from app.config import settings
 import app.database as _db
 from app.models.models import ActivityLog, Deal, JVPartner
 from app.services.gmail_service import send_email
+from app.services.gmail_monitor import _decode_header_value, _extract_email, _get_email_body
 from app.services.groq_client import groq_chat_completion, extract_json_block
 from app.services.matching_service import trigger_release_for_deal_async
 from app.services.resilience import log_retry_attempt, record_metric
@@ -824,55 +824,3 @@ async def run_title_chases(db: Optional[AsyncSession] = None) -> int:
             await db.close()
 
 
-# ---------------------------------------------------------------------------
-# Helper functions (shared with gmail_monitor)
-# ---------------------------------------------------------------------------
-
-
-def _decode_header_value(value: str) -> str:
-    """Decode an email header value that may be MIME-encoded."""
-    if not value:
-        return ""
-    decoded_parts = decode_header(value)
-    result: List[str] = []
-    for part, charset in decoded_parts:
-        if isinstance(part, bytes):
-            try:
-                result.append(part.decode(charset or "utf-8", errors="replace"))
-            except (LookupError, UnicodeDecodeError):
-                result.append(part.decode("utf-8", errors="replace"))
-        else:
-            result.append(str(part))
-    return " ".join(result)
-
-
-def _extract_email(from_field: str) -> str:
-    """Extract the email address portion from a 'Name <email>' header value."""
-    match = re.search(r"<([^>]+)>", from_field)
-    if match:
-        return match.group(1).strip()
-    return from_field.strip()
-
-
-def _get_email_body(msg) -> str:
-    """Extract the plain-text body from an email message, handling multipart."""
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain":
-                payload = part.get_payload(decode=True)
-                if payload:
-                    charset = part.get_content_charset() or "utf-8"
-                    try:
-                        return payload.decode(charset, errors="replace")
-                    except (LookupError, UnicodeDecodeError):
-                        return payload.decode("utf-8", errors="replace")
-        return "(No plain text body found)"
-    else:
-        payload = msg.get_payload(decode=True)
-        if payload:
-            charset = msg.get_content_charset() or "utf-8"
-            try:
-                return payload.decode(charset, errors="replace")
-            except (LookupError, UnicodeDecodeError):
-                return payload.decode("utf-8", errors="replace")
-        return "(No body content)"

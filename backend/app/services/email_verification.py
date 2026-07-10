@@ -172,9 +172,9 @@ def _compute_score(
         return "invalid", score
 
     # SMTP check (high weight, but may be inconclusive)
-    if smtp_result is True:
+    if smtp_result == True:
         score += 40
-    elif smtp_result is False:
+    elif smtp_result == False:
         score -= 20  # SMTP explicitly rejected
     # smtp_result is None — inconclusive, no change
 
@@ -248,9 +248,9 @@ async def verify_email(email: str) -> dict:
         try:
             smtp_response = await asyncio.to_thread(_smtp_check, primary_mx, normalized_email)
             smtp_performed = True
-            if smtp_response["success"] is True:
+            if smtp_response["success"] == True:
                 smtp_result = True
-            elif smtp_response["success"] is False:
+            elif smtp_response["success"] == False:
                 smtp_result = False
             else:
                 smtp_result = None

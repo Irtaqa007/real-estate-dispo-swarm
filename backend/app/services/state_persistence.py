@@ -18,7 +18,7 @@ Usage:
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
@@ -306,7 +306,6 @@ async def increment_gmail_send_count() -> int:
         The updated count for today.
     """
     from zoneinfo import ZoneInfo
-    from datetime import datetime, timedelta
 
     now = datetime.now(ZoneInfo(settings.gmail_timezone))
     today_str = now.strftime("%Y-%m-%d")
@@ -338,7 +337,6 @@ async def save_scheduler_heartbeat(tick_count: int) -> None:
     Args:
         tick_count: The current tick number (increments each loop).
     """
-    from datetime import datetime, timezone
     await _set_state(KEY_SCHEDULER_HEARTBEAT, {
         "last_tick": datetime.now(timezone.utc).isoformat(),
         "tick_count": tick_count,

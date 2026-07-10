@@ -14,7 +14,7 @@ import logging
 import re
 import uuid
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Dict, List, Optional, Tuple, TypedDict
 
 
 class ReplyClassification(TypedDict, total=False):
@@ -607,8 +607,7 @@ async def process_reply(
                                         validation.corrected_content or holding_body
                                     )
                                 except Exception as e:
-                                    logger.debug("reply_processor.py: suppressed error: %s", e)
-                                    pass
+                                    logger.warning("Holding email validation failed for buyer %s: %s", other_buyer_id, e)
 
                                 await send_email(
                                     to=other_buyer.email,
@@ -671,8 +670,7 @@ async def process_reply(
                         if ai_summary:
                             thread_summary = ai_summary
                     except Exception as e:
-                        logger.debug("reply_processor.py: suppressed error: %s", e)
-                        pass
+                        logger.warning("Thread summary generation failed for buyer %s, deal %s: %s", buyer_id, deal_id, e)
 
                     # Extract negotiated price (best-effort, falls back to asking)
                     negotiated_price = asking
@@ -687,8 +685,7 @@ async def process_reply(
                         if extracted_price is not None:
                             negotiated_price = extracted_price
                     except Exception as e:
-                        logger.debug("reply_processor.py: suppressed error: %s", e)
-                        pass
+                        logger.warning("Negotiated price extraction failed for buyer %s, deal %s: %s", buyer_id, deal_id, e)
 
                     alert_metadata = {
                         "alert_type": "contract_ready",
@@ -1016,8 +1013,7 @@ async def match_reply_to_campaign(
                 )
                 return campaign, "header"
         except ValueError as e:
-            logger.debug("reply_processor.py: suppressed error: %s", e)
-            pass
+            logger.warning("Failed to parse campaign UUID from header for buyer %s: %s", buyer_id, e)
 
     # ── Load all active campaigns for this buyer ──
     active_campaigns = await db.execute(
@@ -1293,16 +1289,14 @@ async def detect_future_buying_window(
                 resolved_date = datetime.strptime(target_date_str, "%Y-%m-%d")
                 resolved_date = resolved_date.replace(tzinfo=timezone.utc)
             except ValueError as e:
-                logger.debug("reply_processor.py: suppressed error: %s", e)
-                pass
+                logger.warning("Failed to parse target_date '%s': %s", target_date_str, e)
 
         if resolved_date is None and target_month_str:
             try:
                 dt = datetime.strptime(target_month_str, "%Y-%m")
                 resolved_date = dt.replace(day=1, tzinfo=timezone.utc)
             except ValueError as e:
-                logger.debug("reply_processor.py: suppressed error: %s", e)
-                pass
+                logger.warning("Failed to parse target_month '%s': %s", target_month_str, e)
 
         if resolved_date is None:
             # Relative timeframe — default to 3 months from now

@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Failed to pre-load embedding model: %s", e, exc_info=True)
 
-    asyncio.ensure_future(_preload_model_background())
+    asyncio.create_task(_preload_model_background())
 
     yield
     # Shutdown: stop scheduler and cleanup

@@ -30,52 +30,12 @@ from app.config import settings
 from app.models.models import Campaign, Deal, Buyer
 from app.services.groq_client import groq_chat_completion, extract_json_block
 
-__all__ = ['process_conversation']
 
 
 logger = logging.getLogger(__name__)
 
-# ── Hard-coded phrase lists for pre-AI detection ─────────────────────────────
-# These are checked before calling Groq — saves tokens and avoids the model
-# trying to "save" a deal when buyer has clearly said no.
-
-_UNSUBSCRIBE_PHRASES = [
-    "unsubscribe", "remove me", "take me off", "stop contacting",
-    "do not contact", "opt out", "opt-out", "don't email me",
-    "stop emailing", "remove from list", "take me off your list",
-]
-
-_HARD_PASS_PHRASES = [
-    "not for me", "i'll pass", "i will pass", "pass on this", "i pass",
-    "not interested", "no thanks", "no thank you", "doesn't fit",
-    "doesn't work for me", "doesn't match", "not buying",
-    "not in the market", "went under contract", "already have something",
-    "stop reaching out", "not what i'm looking for", "not a fit",
-    "can't make it work", "numbers don't work", "too much work",
-]
 
 
-def _info_collected(campaign: Campaign) -> dict:
-    return {
-        "legal_name": bool(campaign.buyer_legal_name),
-        "phone": bool(campaign.buyer_phone),
-        "title_company": bool(campaign.buyer_title_company),
-        "agreed_price": campaign.agreed_price is not None,
-    }
-
-
-def _all_info_collected(campaign: Campaign) -> bool:
-    return all(_info_collected(campaign).values())
-
-
-def _next_missing_info(campaign: Campaign) -> Optional[str]:
-    if not campaign.buyer_legal_name:
-        return "legal_name"
-    if not campaign.buyer_phone:
-        return "phone"
-    if not campaign.buyer_title_company:
-        return "title_company"
-    return None
 
 
 async def process_conversation(
@@ -94,10 +54,9 @@ async def process_conversation(
                         classification
     """
     current_stage = campaign.conversation_stage or "pitching"
-    reply_lower = reply_body.lower()
 
     # ── Pre-checks (no AI needed) ────────────────────────────────────────────
-    _rlo = reply_body.lower().strip()
+    reply_lower = reply_body.lower().strip()
 
     _UNSUB = ["unsubscribe","remove me","take me off","stop contacting",
               "do not contact","opt out","stop emailing"]
@@ -105,14 +64,14 @@ async def process_conversation(
               "no thanks","no thank you","doesn't fit","not buying","not in the market",
               "stop reaching out","price is too high","pass on","no thanks","pass"]
 
-    if any(p in _rlo for p in _UNSUB):
+    if any(p in reply_lower for p in _UNSUB):
         return {
             "next_message": f"Got it — removing you from my list.\n\n{settings.operator_signature}",
             "new_stage": "passed", "contract_ready": False,
             "pass_detected": False, "unsubscribe_detected": True,
             "extracted_info": {}, "notes": "Unsubscribe via pre-check",
         }
-    if any(p in _rlo for p in _PASS):
+    if any(p in reply_lower for p in _PASS):
         return {
             "next_message": None,
             "new_stage": "passed", "contract_ready": False,
@@ -120,7 +79,7 @@ async def process_conversation(
             "extracted_info": {}, "notes": "Pass via pre-check",
         }
 
-    reply_lower = _rlo
+
     # ── Build context for AI ─────────────────────────────────────────────────
     thread_str = ""
     for msg in thread_history[-6:]:
@@ -319,11 +278,10 @@ async def process_conversation(
 
         if next_message:
             # Never expose floor price — strip any mention
-            import re as _re
-            next_message = _re.sub(
+            next_message = re.sub(
                 r'(?:floor|minimum|lowest)[\s\w]*?\$[\d,]+',
                 'my number',
-                next_message, flags=_re.IGNORECASE
+                next_message, flags=re.IGNORECASE
             )
             sign_off = settings.operator_signature.strip()
             if sign_off and sign_off not in next_message:

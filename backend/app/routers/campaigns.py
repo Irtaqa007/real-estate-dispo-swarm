@@ -30,7 +30,7 @@ from app.services.gmail_monitor import check_for_replies
 from app.services.gmail_service import send_email
 from app.services.dead_letter_queue import move_to_dlq
 from app.services.reply_processor import process_reply, extract_buybox_changes, get_question_round_message, detect_uncertainty_and_hold, match_reply_to_campaign
-from app.services.title_coordinator import send_assignment_contract
+
 from app.services.buyer_scoring import assess_buyer_eligibility, check_fatigue_protection
 from app.services.buyer_merge import merge_buy_boxes
 from app.services.matching_service import (
@@ -40,8 +40,6 @@ from app.services.matching_service import (
 )
 from app.services.negotiation import handle_counter_offer
 from app.services.audit_logger import audit
-from app.services.jv_rotator import check_jv_rotation
-from app.services.market_adjuster import check_touch_3_adjustment, check_touch_4_adjustment
 from app.services.parse_buy_box import parse_buy_box
 
 logger = logging.getLogger(__name__)
@@ -528,8 +526,7 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
                                         validation.corrected_content or holding_body
                                     )
                             except Exception as e:
-                                logger.debug("campaigns.py: suppressed error: %s", e)
-                                pass
+                                logger.warning("Holding email validation failed for buyer %s: %s", other_buyer_id, e)
 
                             await send_email(
                                 to=other_buyer.email,

@@ -221,9 +221,28 @@ class TestLaunchCampaignForBuyer:
     async def test_alist_touch1_sent_immediately(self, mock_db, mock_buyer, mock_deal):
         """A-List buyer: touch 1 should be Sent immediately via send_email."""
         mock_buyer.buyer_tier = "A-List"
-        mock_db.execute = AsyncMock(return_value=MagicMock(
-            scalar_one_or_none=MagicMock(return_value=None)
-        ))
+
+        # Setup proper db.execute side_effects for the re-fetches inside launch_campaign_for_buyer
+        async def _execute_side_effect(*args, **kwargs):
+            sql = args[0]
+            sql_str = str(sql)
+            result = MagicMock()
+            if "FROM deals" in sql_str or "FROM campaigns" in sql_str:
+                result.scalar_one_or_none = MagicMock(return_value=None)
+                result.scalar_one = MagicMock(return_value=mock_deal)
+                result.fetchall = MagicMock(return_value=[])
+                result.scalars = MagicMock(return_value=result)
+                result.all = MagicMock(return_value=[])
+            elif "FROM buyers" in sql_str:
+                result.scalar_one = MagicMock(return_value=mock_buyer)
+                result.scalar_one_or_none = MagicMock(return_value=None)
+                result.scalars = MagicMock(return_value=result)
+                result.all = MagicMock(return_value=[])
+            else:
+                result.scalar_one_or_none = MagicMock(return_value=None)
+                result.fetchall = MagicMock(return_value=[])
+            return result
+        mock_db.execute = AsyncMock(side_effect=_execute_side_effect)
 
         fake_email = {"subject": "Hot Deal", "body": "Check this out"}
 
@@ -233,13 +252,15 @@ class TestLaunchCampaignForBuyer:
                               AsyncMock(return_value=(True, None))):
                 with patch.object(cl, "generate_touch_email",
                                   AsyncMock(return_value=fake_email)):
-                    with patch.object(cl, "send_email",
-                                      AsyncMock(return_value={"message_id": "msg123"})):
-                        with patch.object(cl, "increment_pitch_count",
-                                          AsyncMock()):
-                            result = await cl.launch_campaign_for_buyer(
-                                mock_db, mock_buyer, mock_deal
-                            )
+                    with patch.object(cl, "validate_ai_output",
+                                      AsyncMock(return_value=MagicMock(severity="pass"))):
+                        with patch.object(cl, "send_email",
+                                          AsyncMock(return_value={"message_id": "msg123"})):
+                            with patch.object(cl, "increment_pitch_count",
+                                              AsyncMock()):
+                                result = await cl.launch_campaign_for_buyer(
+                                    mock_db, mock_buyer, mock_deal
+                                )
 
         campaigns = mock_db.add_all.call_args[0][0]
 

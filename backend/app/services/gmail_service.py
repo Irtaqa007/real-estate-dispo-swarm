@@ -30,7 +30,6 @@ from app.services.audit_logger import audit
 from app.services.circuit_breaker import (
     CircuitBreakerOpenError,
     gmail_circuit_breaker,
-    with_gmail_circuit_breaker,
 )
 from app.services.resilience import (
     idempotent,

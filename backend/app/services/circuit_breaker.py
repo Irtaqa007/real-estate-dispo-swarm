@@ -21,6 +21,7 @@ Usage:
     gmail_circuit_breaker.report(success=True)
 """
 
+import asyncio
 import collections
 import logging
 import time
@@ -224,8 +225,7 @@ class GmailCircuitBreaker:
         # Notify persistence layer (fire-and-forget via task if needed)
         if self._persist_callback:
             try:
-                import asyncio
-                asyncio.ensure_future(self._persist_callback())
+                asyncio.create_task(self._persist_callback())
             except Exception as e:
                 logger.warning("Persistence callback failed after queue: %s", e, exc_info=True)
         return True
@@ -245,8 +245,7 @@ class GmailCircuitBreaker:
             # Notify persistence layer
             if self._persist_callback:
                 try:
-                    import asyncio
-                    asyncio.ensure_future(self._persist_callback())
+                    asyncio.create_task(self._persist_callback())
                 except Exception as e:
                     logger.warning("Persistence callback failed after drain: %s", e, exc_info=True)
         return items
@@ -398,43 +397,7 @@ def get_cb_queue() -> List[Dict[str, str]]:
     return gmail_circuit_breaker.get_queue_items()
 
 
-# ---------------------------------------------------------------------------
-# Decorator-based integration (alternative to manual check/report)
-# ---------------------------------------------------------------------------
-
-
 class CircuitBreakerOpenError(Exception):
     """Raised when the circuit breaker is open and the call is rejected."""
     pass
 
-
-def with_gmail_circuit_breaker(func):
-    """Decorator that wraps an async function with the Gmail circuit breaker.
-
-    The decorated function is expected to raise on failure. The circuit
-    breaker will record successes and failures automatically.
-
-    If the circuit is open, the function is not called and
-    CircuitBreakerOpenError is raised instead.
-    """
-    import functools
-
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        ctx = gmail_circuit_breaker.check()
-        if not ctx.allowed:
-            raise CircuitBreakerOpenError(
-                f"Gmail circuit breaker is OPEN ({ctx.state}). "
-                f"{ctx.failures_in_window} failures in window. "
-                f"Recovery in ~{ctx.recovery_remaining:.0f}s. "
-                f"{ctx.queued_count} emails queued."
-            )
-        try:
-            result = await func(*args, **kwargs)
-            gmail_circuit_breaker.report(success=True)
-            return result
-        except Exception as e:
-            gmail_circuit_breaker.report(success=False)
-            raise
-
-    return wrapper

@@ -244,7 +244,6 @@ class TestFiftyBuyerGate:
         }
 
         db = AsyncMock()
-        db.execute = AsyncMock()
         db.add = MagicMock()
         db.commit = AsyncMock()
 
@@ -252,11 +251,40 @@ class TestFiftyBuyerGate:
         no_campaigns = FakeScalarResult(None)
         buyer_records = FakeRowsResult(buyers)
 
-        db.execute = AsyncMock(side_effect=[
-            deal_result,        # 1: fetch deal
-            no_campaigns,       # 2: idempotency check
-            buyer_records,      # 3: fetch buyer records
-        ])
+        def _make_empty_result():
+            r = MagicMock()
+            r.scalars.return_value.all.return_value = []
+            r.fetchall.return_value = []
+            r.scalar_one_or_none.return_value = None
+            r.all.return_value = []
+            r.scalar_one.return_value = None
+            return r
+
+        empty = _make_empty_result()
+        # Use a dynamic side_effect that returns valid results for any call
+        # Build a result that returns mock_deal from scalar_one() for deal re-fetch
+        class FreshDealResult:
+            def scalar_one(self):
+                return mock_deal
+            def scalars(self):
+                return self
+            def all(self):
+                return []
+            def fetchall(self):
+                return []
+            def scalar_one_or_none(self):
+                return mock_deal
+
+        results = [
+            deal_result,             # 1: fetch deal
+            no_campaigns,            # 2: idempotency check
+            buyer_records,           # 3: fetch buyer records
+            FreshDealResult(),       # 4: re-fetch deal before launch loop
+        ]
+        for _ in range(300):
+            results.append(_make_empty_result())
+
+        db.execute = AsyncMock(side_effect=results)
 
         response = await campaigns_router.launch_campaign(
             deal_id=deal_id,

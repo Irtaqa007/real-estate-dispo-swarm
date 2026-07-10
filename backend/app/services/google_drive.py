@@ -11,8 +11,9 @@ Requires: GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET,
           GOOGLE_DRIVE_REFRESH_TOKEN in .env
 """
 
+import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from io import BytesIO
 from typing import Optional
 
@@ -118,7 +119,6 @@ async def upload_file(file_content: bytes, filename: str, mime_type: str, deal_i
         ValueError: If Drive credentials are not configured.
         googleapiclient.errors.HttpError: If the Drive API call fails.
     """
-    import asyncio
 
     def _upload() -> str:
         creds = _get_credentials()
@@ -159,28 +159,6 @@ async def upload_file(file_content: bytes, filename: str, mime_type: str, deal_i
     return await asyncio.to_thread(_upload)
 
 
-async def upload_multiple(
-    files: list[tuple[bytes, str, str]], deal_id: str
-) -> list[str]:
-    """Upload multiple files to Google Drive for a single deal.
-
-    Args:
-        files: List of (file_content, filename, mime_type) tuples.
-        deal_id: UUID string of the deal.
-
-    Returns:
-        List of shareable Google Drive URLs, one per file.
-    """
-    urls = []
-    for content, filename, mime_type in files:
-        try:
-            url = await upload_file(content, filename, mime_type, deal_id)
-            urls.append(url)
-        except Exception as e:
-            logger.error("Failed to upload %s for deal %s: %s", filename, deal_id, e, exc_info=True)
-    return urls
-
-
 # ---------------------------------------------------------------------------
 # Archive & permission management
 # ---------------------------------------------------------------------------
@@ -213,7 +191,6 @@ async def _cache_archive_folder_id(folder_id: str) -> None:
     try:
         from app.database import async_session_factory
         from app.models.models import AppState
-        from datetime import datetime, timezone
         async with async_session_factory() as db:
             existing = await db.get(AppState, KEY_DRIVE_ARCHIVE_FOLDER)
             if existing is not None:
@@ -269,7 +246,6 @@ async def get_or_create_archive_folder(drive_service) -> str:
         logger.info("Created 'Closed Deals Archive' folder (id=%s)", folder["id"])
         return folder["id"]
 
-    import asyncio
     folder_id = await asyncio.to_thread(_find_or_create)
 
     # Cache for future use
@@ -302,7 +278,6 @@ async def archive_deal_folder(
             archived_folder_id (str): The deal folder's ID (same, just moved).
             error (Optional[str]): Error message if failed.
     """
-    import asyncio
 
     try:
         archive_folder_id = await get_or_create_archive_folder(drive_service)
@@ -368,7 +343,6 @@ async def revoke_shared_links(
     Returns:
         int: Number of permissions revoked.
     """
-    import asyncio
 
     def _revoke() -> int:
         revoked_count = 0

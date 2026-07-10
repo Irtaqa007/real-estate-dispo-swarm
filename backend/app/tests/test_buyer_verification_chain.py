@@ -237,10 +237,12 @@ class TestCreateBuyerVerificationQueue:
         mock_db = AsyncMock()
 
         with patch.object(buyers_router, "find_duplicate_buyer", AsyncMock(return_value=(None, ""))):
-            with patch.object(buyers_router, "Buyer") as MockBuyer:
-                MockBuyer.return_value = MagicMock()
+            with patch.object(buyers_router, "parse_buy_box", AsyncMock(return_value={})):
                 mock_db.commit = AsyncMock()
-                mock_db.refresh = AsyncMock()
+                # After commit, create_buyer re-fetches the buyer via db.execute
+                mock_buyer_result = MagicMock()
+                mock_buyer_result.scalar_one.return_value = MagicMock()
+                mock_db.execute = AsyncMock(return_value=mock_buyer_result)
 
                 await buyers_router.create_buyer(
                     mock_request_data, mock_background_tasks, mock_db

@@ -31,8 +31,6 @@ from groq import AsyncGroq
 from app.config import settings
 from app.services.resilience import record_metric
 
-__all__ = ['groq_chat_completion', 'extract_json_block']
-
 
 logger = logging.getLogger(__name__)
 

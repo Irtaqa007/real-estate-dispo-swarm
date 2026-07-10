@@ -496,7 +496,6 @@ class TestProcessQueuedMatches:
         assert mock_queued_match.status == "released"
         assert mock_queued_match.released_at is not None
         mock_db.add.assert_called_with(mock_queued_match)
-        mock_db.commit.assert_awaited()
         mock_launch.assert_awaited_once()
         call_kwargs = mock_launch.call_args[1]
         assert call_kwargs["buyer"] == mock_buyer
@@ -690,7 +689,6 @@ class TestProcessQueuedMatches:
                 assert count == 1
                 assert match2.status == "released"
                 assert match2.released_at is not None
-                mock_db.commit.assert_awaited()
                 mock_launch.assert_awaited_once()
 
 

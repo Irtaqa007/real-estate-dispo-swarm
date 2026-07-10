@@ -16,7 +16,6 @@ from app.config import settings
 from app.services.groq_client import groq_chat_completion, extract_json_block
 from app.services.opt_out import append_unsubscribe_footer
 
-__all__ = ['generate_touch_email', 'TOUCH_CONFIGS']
 
 
 logger = logging.getLogger(__name__)
@@ -320,19 +319,6 @@ def _build_prompt(
         + "\n"
     ) if intelligence_lines else ""
 
-    operator_id_block = (
-        "\n"
-        "OPERATOR IDENTITY (you ARE this person, write as them):\n"
-        f"Name: {settings.operator_name}\n"
-        f"Sign-off: {settings.operator_signature}\n"
-        f"Tone: {settings.operator_tone}\n"
-        f"Never use these words/phrases: {settings.operator_never_say}\n"
-        f"Personal context (use naturally if relevant):\n"
-        f"{settings.operator_context}\n"
-        f"IMPORTANT: Subject line must NEVER contain the operator name — "
-        f"subject lines are deal-focused only.\n"
-    )
-
     system_prompt = (
         f"OPERATOR IDENTITY — you ARE this person, write entirely as them:\n"
         f"Name: {settings.operator_name}\n"
@@ -533,8 +519,7 @@ async def generate_touch_email(
 
         # Post-process subject: fix beds/baths hallucination
         if beds and baths:
-            import re as _re_sub
-            subject = _re_sub.sub(
+            subject = re.sub(
                 r'\b\d+/\d+\b',
                 f"{beds}/{int(baths)}",
                 subject
@@ -608,8 +593,6 @@ async def generate_touch_email(
 
         # Post-process: remove ALL "factor in rehab" language when rehab IS known
         if rehab_estimate and rehab_estimate > 0:
-            import re as _re
-            # These phrases contradict the rehab number we already gave
             _factor_patterns = [
                 r"[Yy]ou(?:'ll)? want to factor in rehab costs?[^.]*\.",
                 r"[Yy]ou should factor (?:in )?(?:your own )?(?:rehab )?(?:costs?|numbers?)[^.]*\.",
@@ -619,10 +602,10 @@ async def generate_touch_email(
                 r", but (?:you|you'll need to) factor[^.]*\.",
             ]
             for pat in _factor_patterns:
-                body = _re.sub(pat, "", body).strip()
+                body = re.sub(pat, "", body).strip()
             # Clean up double spaces or orphaned punctuation
-            body = _re.sub(r'  +', ' ', body)
-            body = _re.sub(r'\. \.', '.', body)
+            body = re.sub(r'  +', ' ', body)
+            body = re.sub(r'\. \.', '.', body)
 
         # Post-process: fix spread/profit framing
         body = body.replace("spread before rehab", "buyer profit after rehab")
@@ -666,17 +649,15 @@ async def generate_touch_email(
         }
         for _banned, _replacement in _BANNED_REPLACEMENTS.items():
             if _banned.lower() in body.lower():
-                import re as _re2
-                body = _re2.sub(_re2.escape(_banned), _replacement, body, flags=_re2.IGNORECASE)
+                body = re.sub(re.escape(_banned), _replacement, body, flags=re.IGNORECASE)
 
         # Post-process: enforce off-market mention in Touch 1
         if touch == 1 and "off-market" not in body.lower() and "off market" not in body.lower():
             body = "This is an off-market deal — not listed anywhere. " + body
 
         # Post-process: strip any sign-off the AI included (it gets appended correctly later)
-        import re as _re
-        body = _re.sub(r'\n\s*Best,\s*\nIrtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
-        body = _re.sub(r'\n\s*Best,\s*Irtaqa\s*$', '', body, flags=_re.IGNORECASE).rstrip()
+        body = re.sub(r'\n\s*Best,\s*\nIrtaqa\s*$', '', body, flags=re.IGNORECASE).rstrip()
+        body = re.sub(r'\n\s*Best,\s*Irtaqa\s*$', '', body, flags=re.IGNORECASE).rstrip()
 
         # Post-process: fix ZIP code hallucination — replace any 5-digit number with correct zip
         if zip_code:

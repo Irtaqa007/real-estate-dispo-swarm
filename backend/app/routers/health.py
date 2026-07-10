@@ -22,7 +22,7 @@ from app.config import settings
 from app.database import engine, get_db
 from app.models.models import Campaign, FailedCampaign
 from app.services.circuit_breaker import gmail_circuit_breaker
-from app.services.embeddings import check_cohere_health
+from app.services.embeddings import check_embedding_health
 from app.services.groq_client import get_rate_limit_status, groq_chat_completion
 from app.services.resilience import get_resilience_health
 from app.services.scheduler import is_scheduler_running
@@ -140,7 +140,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     # ------------------------------------------------------------------
     # Cohere embedding API status
     # ------------------------------------------------------------------
-    cohere_result = await check_cohere_health()
+    cohere_result = await check_embedding_health()
     cohere_status = "ok" if cohere_result["reachable"] else "unavailable"
     cohere_detail = {
         "configured": cohere_result["configured"],

@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from urllib.parse import urlparse
@@ -133,10 +134,23 @@ class Settings(BaseSettings):
             return 5432
 
 
+    @field_validator("operator_email_signature", mode="before")
+    @classmethod
+    def _convert_literal_newlines(cls, v: str) -> str:
+        """Convert literal \\n in .env values to actual newlines at load time.
+
+        This ensures the raw field `operator_email_signature` contains real
+        newlines (not literal backslash-n), so both the field and the
+        `operator_signature` property return the correct value.
+        """
+        if isinstance(v, str):
+            return v.replace("\\n", "\n")
+        return v
+
     @property
     def operator_signature(self) -> str:
-        """Return operator_email_signature with literal \\n replaced by real newlines."""
-        return self.operator_email_signature.replace("\\n", "\n")
+        """Alias for operator_email_signature (newlines already converted at load time)."""
+        return self.operator_email_signature
 
 
 settings = Settings()

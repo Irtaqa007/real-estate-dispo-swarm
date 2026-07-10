@@ -57,7 +57,7 @@ class BuyerResponse(BuyerBase):
     offers_accepted: Optional[int] = 0
     offers_rejected: Optional[int] = 0
     deals_closed: Optional[int] = 0
-    deads_fell_through: Optional[int] = 0
+    deals_fell_through: Optional[int] = 0
     avg_spread_closed: Optional[float] = None
     total_lifetime_spread: Optional[float] = 0
     engagement_score: Optional[float] = 0

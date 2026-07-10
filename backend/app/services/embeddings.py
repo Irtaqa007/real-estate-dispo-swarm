@@ -113,5 +113,4 @@ async def check_embedding_health() -> dict:
         }
 
 
-# Keep old name as alias for backward compatibility
-check_cohere_health = check_embedding_health
+

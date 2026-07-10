@@ -50,6 +50,7 @@ from app.services.groq_client import get_call_count_today, get_calls_today_date
 from app.services.buyer_merge import merge_buy_boxes
 from app.models.models import BuyerEmail
 from app.services.parse_buy_box import parse_buy_box
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -233,12 +234,10 @@ async def process_scheduled_campaigns() -> int:
                                 correct_k = f"${correct_profit//1000:.0f}k"
                                 wrong_full = f"${wrong_spread:,.0f}"
                                 correct_full = f"${correct_profit:,.0f}"
-                                subject_to_send = (subject_to_send
-                                    .replace(wrong_full, correct_full)
-                                    .replace(wrong_k, correct_k))
+                                subject_to_send = (subject_to_send                                .replace(wrong_full, correct_full)
+                                .replace(wrong_k, correct_k))
                         except Exception as e:
-                            logger.debug("scheduler.py: suppressed error: %s", e)
-                            pass
+                            logger.warning("Subject spread correction failed for campaign %s: %s", campaign.id, e)
 
                     result = await send_email(
                         to=buyer.email,
@@ -275,8 +274,7 @@ async def process_scheduled_campaigns() -> int:
                         campaign.status = "Failed"
                         db.add(campaign)
                     except Exception as e:
-                        logger.debug("scheduler.py: suppressed error: %s", e)
-                        pass
+                        logger.warning("Failed to mark campaign %s as Failed after processing error: %s", campaign.id, e)
 
             # Commit all changes
             await db.commit()
@@ -444,10 +442,9 @@ async def process_buyer_replies() -> int:
                         continue
 
                     # Strip quoted thread from reply body before passing to AI
-                    import re as _re
                     raw_body = reply.get("body", "")
                     # Remove everything after "On ... wrote:" pattern (quoted original)
-                    clean_body = _re.split(r'\n\s*On .{10,100}wrote:\s*\n', raw_body)[0].strip()
+                    clean_body = re.split(r'\n\s*On .{10,100}wrote:\s*\n', raw_body)[0].strip()
                     # Also remove lines starting with > (quoted lines)
                     clean_body = "\n".join(
                         line for line in clean_body.splitlines()
@@ -508,8 +505,7 @@ async def process_buyer_replies() -> int:
                         try:
                             campaign.agreed_price = float(str(extracted["agreed_price"]).replace(",","").replace("$",""))
                         except Exception as e:
-                            logger.debug("scheduler.py: suppressed error: %s", e)
-                            pass
+                            logger.warning("Failed to parse agreed_price for campaign %s: %s", campaign.id, e)
 
                     # Handle terminal states
                     if conv_result["pass_detected"] or conv_result["unsubscribe_detected"]:
@@ -1370,8 +1366,7 @@ async def _scheduler_loop() -> None:
             try:
                 await save_scheduler_heartbeat(_tick_count)
             except Exception as e:
-                logger.debug("scheduler.py: suppressed error: %s", e)
-                pass
+                logger.warning("Scheduler heartbeat save failed: %s", e)
 
             # ====================================================================
             # REPLY INTERVAL — runs every 5 minutes (time-sensitive tasks)

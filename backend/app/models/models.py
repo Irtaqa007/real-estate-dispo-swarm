@@ -45,7 +45,7 @@ class Buyer(Base):
     offers_accepted = Column(Integer, default=0)
     offers_rejected = Column(Integer, default=0)
     deals_closed = Column(Integer, default=0)
-    deads_fell_through = Column(Integer, default=0)
+    deals_fell_through = Column(Integer, default=0)
     avg_spread_closed = Column(Numeric(19, 2), nullable=True)
     total_lifetime_spread = Column(Numeric(19, 2), default=0)
     engagement_score = Column(Float, default=0)
