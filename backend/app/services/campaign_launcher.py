@@ -209,6 +209,7 @@ async def launch_campaign_for_buyer(
             price_max=float(buyer.price_max) if buyer.price_max else None,
             pref_cities=buyer.pref_cities,
             comps=comps_list if comps_list else None,
+            expiry_date=deal.expiry_date,
         )
 
         # Skip touch if Groq failed — never send fallback garbage

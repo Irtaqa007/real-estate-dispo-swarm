@@ -212,6 +212,7 @@ def _build_prompt(
     pref_cities: Optional[list[str]] = None,
     # Comps parameters
     comps: Optional[list[dict]] = None,
+    expiry_date: Optional[datetime] = None,
 ) -> list[dict]:
     """Build the Groq chat prompt for generating a touch email."""
 
@@ -321,6 +322,24 @@ def _build_prompt(
         + "\n"
     ) if intelligence_lines else ""
 
+    # ── Expiry urgency block ──
+    _expiry_block = ""
+    if expiry_date:
+        target = expiry_date.replace(tzinfo=timezone.utc) if expiry_date.tzinfo is None else expiry_date
+        days_left = (target - datetime.now(timezone.utc)).days
+        if days_left >= 0 and days_left <= 3:
+            _expiry_block = (
+                f"URGENT: This deal closes in {days_left} day(s). "
+                f"Open with urgency — mention 'I need a decision by {expiry_date.strftime('%B %d')}'\n"
+            )
+        elif days_left >= 4 and days_left <= 7:
+            _expiry_block = (
+                f"DEADLINE: Deal closes {expiry_date.strftime('%B %d')}. "
+                f"Mention the timeline naturally in the email.\n"
+            )
+        if _expiry_block:
+            _expiry_block += "\n"
+
     # ── Comps injection (touch >= 3 only) ──
     _comps_block = ""
     if comps and touch >= 3:
@@ -415,6 +434,8 @@ def _build_prompt(
         )
         +        f"DO NOT say 'the spread is X' — say 'buyer profit is X' or 'you clear X after rehab'.\n"
         + _comps_block
+        # ── Expiry urgency ──
+        + _expiry_block
         + f"Return ONLY JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
     )
 
@@ -459,6 +480,7 @@ async def generate_touch_email(
     pref_cities: Optional[list[str]] = None,
     # Comps parameters
     comps: Optional[list[dict]] = None,
+    expiry_date: Optional[datetime] = None,
 ) -> dict:
     """Generate a single touch email using Groq AI.
 
@@ -472,6 +494,7 @@ async def generate_touch_email(
         avg_spread_closed: Buyer's average deal spread.
         price_min/max: Buyer's preferred price range.
         pref_cities: Buyer's preferred cities/areas.
+        expiry_date: Deal expiry date for urgency prompts.
 
     Returns:
         dict with keys: subject, body, touch, status, scheduled_at
@@ -505,6 +528,7 @@ async def generate_touch_email(
         price_max=price_max,
         pref_cities=pref_cities,
         comps=comps,
+        expiry_date=expiry_date,
     )
 
     try:

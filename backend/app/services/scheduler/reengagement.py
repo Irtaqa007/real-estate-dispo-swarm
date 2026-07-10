@@ -171,6 +171,7 @@ async def fire_buyer_reengagements() -> int:
                             baths=deal.baths,
                             sqft=deal.sqft,
                             buyer_id=buyer.id,
+                            expiry_date=deal.expiry_date,
                         )
                     finally:
                         buyer.buy_box = original_buy_box

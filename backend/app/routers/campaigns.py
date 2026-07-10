@@ -649,18 +649,6 @@ async def check_replies_endpoint(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/id/{campaign_id}", response_model=CampaignResponse)
-async def get_campaign(campaign_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Get a single campaign by its ID."""
-    campaign = await db.get(Campaign, campaign_id)
-    if not campaign:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Campaign not found",
-        )
-    return campaign
-
-
 # ---------------------------------------------------------------------------
 # Campaign pause / resume — must come BEFORE /{deal_id}/launch and other
 # /{deal_id} routes to prevent "pause"/"resume" from being incorrectly
@@ -777,6 +765,18 @@ async def resume_campaigns(
     )
 
     return {"resumed_count": resumed_count, "deal_id": str(deal_id)}
+
+
+@router.get("/id/{campaign_id}", response_model=CampaignResponse)
+async def get_campaign(campaign_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Get a single campaign by its ID."""
+    campaign = await db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Campaign not found",
+        )
+    return campaign
 
 
 @router.post(
