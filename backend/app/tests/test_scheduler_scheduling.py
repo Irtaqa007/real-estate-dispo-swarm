@@ -129,6 +129,20 @@ def _patch_db(campaigns_to_return, deal, buyer, replied_exists=False, prev_is_se
                 sql = args[0] if args else None
                 sql_str = str(sql) if sql is not None else ""
 
+                # ── Batch-load Deals query (distinct: FROM deals + id IN) ──
+                if "from deals" in sql_str.lower() and "id in" in sql_str.lower():
+                    result = MagicMock()
+                    result.scalars = MagicMock(return_value=result)
+                    result.all = MagicMock(return_value=[deal])
+                    return result
+
+                # ── Batch-load Buyers query (distinct: FROM buyers + id IN) ──
+                if "from buyers" in sql_str.lower() and "id in" in sql_str.lower():
+                    result = MagicMock()
+                    result.scalars = MagicMock(return_value=result)
+                    result.all = MagicMock(return_value=[buyer])
+                    return result
+
                 # ── Queued campaigns query (distinct: sent_at IS NULL + scheduled_send_at) ──
                 if "sent_at" in sql_str and "IS NULL" in sql_str and "scheduled_send_at" in sql_str:
                     result = MagicMock()
@@ -238,8 +252,8 @@ class TestProcessScheduledCampaigns:
         factory_patch, mock_db = _patch_db(campaigns, deal, buyer, prev_is_sent=True)
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", AsyncMock(return_value={"status": "sent", "message_id": "msg123"})):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", AsyncMock(return_value={"status": "sent", "message_id": "msg123"})):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 6  # All 6 touches should send
@@ -259,8 +273,8 @@ class TestProcessScheduledCampaigns:
         factory_patch, mock_db = _patch_db(campaigns, deal, buyer, prev_is_sent=True)
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", AsyncMock(return_value={"status": "sent", "message_id": "msg123"})):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", AsyncMock(return_value={"status": "sent", "message_id": "msg123"})):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 5  # 5 queued touches (2-6) should all send
@@ -283,8 +297,8 @@ class TestProcessScheduledCampaigns:
         send_mock = AsyncMock(return_value={"status": "sent", "message_id": "msg123"})
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", send_mock):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", send_mock):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 0  # Touch 2 blocked because touch 1 not sent
@@ -303,8 +317,8 @@ class TestProcessScheduledCampaigns:
         send_mock = AsyncMock(return_value={"status": "sent", "message_id": "msg123"})
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", send_mock):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", send_mock):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 0
@@ -327,8 +341,8 @@ class TestProcessScheduledCampaigns:
         factory_patch, mock_db = _patch_db(campaigns, deal, buyer, prev_is_sent=True)
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", AsyncMock(return_value={"status": "sent", "message_id": "msg123"})):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", AsyncMock(return_value={"status": "sent", "message_id": "msg123"})):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 6
@@ -350,8 +364,8 @@ class TestProcessScheduledCampaigns:
         send_mock = AsyncMock(return_value={"status": "sent", "message_id": "msg123"})
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", send_mock):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", send_mock):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 0  # No campaigns sent (paused)
@@ -373,8 +387,8 @@ class TestProcessScheduledCampaigns:
         send_mock = AsyncMock(return_value={"status": "sent", "message_id": "msg123"})
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", send_mock):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", send_mock):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 0
@@ -409,8 +423,8 @@ class TestProcessScheduledCampaigns:
         send_mock = AsyncMock(return_value={"status": "sent", "message_id": "msg123"})
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", send_mock):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", send_mock):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 0
@@ -429,8 +443,8 @@ class TestProcessScheduledCampaigns:
         send_mock = AsyncMock(return_value={"status": "sent", "message_id": "msg123"})
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", send_mock):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", send_mock):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         assert sent == 0
@@ -454,8 +468,8 @@ class TestProcessScheduledCampaigns:
         send_mock = AsyncMock(return_value={"status": "sent", "message_id": "msg123"})
 
         with factory_patch:
-            with patch("app.services.scheduler.send_email", send_mock):
-                with patch("app.services.scheduler.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
+            with patch("app.services.scheduler.campaign_sender.send_email", send_mock):
+                with patch("app.services.scheduler.campaign_sender.validate_ai_output", AsyncMock(return_value=MagicMock(severity="pass"))):
                     sent = await process_scheduled_campaigns()
 
         # Touch 1 skipped (no subject/body), touch 2 should send

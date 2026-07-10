@@ -256,7 +256,7 @@ async def test_fire_skips_inactive_buyer():
 
     factory = _make_async_session_mock(mock_db)
 
-    with patch("app.services.scheduler._db.async_session_factory", factory):
+    with patch("app.database.async_session_factory", factory):
         count = await fire_buyer_reengagements()
 
     assert count == 0
@@ -319,7 +319,7 @@ async def test_fire_creates_no_deal_found():
 
     factory = _make_async_session_mock(mock_db)
 
-    with patch("app.services.scheduler._db.async_session_factory", factory):
+    with patch("app.database.async_session_factory", factory):
         count = await fire_buyer_reengagements()
 
     assert count == 0
@@ -390,7 +390,7 @@ async def test_fire_queues_at_cap():
 
     factory = _make_async_session_mock(mock_db)
 
-    with patch("app.services.scheduler._db.async_session_factory", factory):
+    with patch("app.database.async_session_factory", factory):
         with patch(
             "app.services.matching_service.get_active_deal_count_for_buyer",
             AsyncMock(return_value=2),
@@ -482,7 +482,7 @@ async def test_idempotency_skip_existing_campaign():
 
     factory = _make_async_session_mock(mock_db)
 
-    with patch("app.services.scheduler._db.async_session_factory", factory):
+    with patch("app.database.async_session_factory", factory):
         count = await fire_buyer_reengagements()
 
     assert count == 0

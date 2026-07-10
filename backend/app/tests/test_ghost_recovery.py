@@ -108,7 +108,12 @@ class FakeAsyncSession:
 
 
 def patch_db(scheduler_module):
-    """Patch _db.async_session_factory to return a FakeAsyncSession.
+    """Patch async_session_factory on the real app.database module.
+
+    Patching at the app.database level ensures all sub-modules
+    (campaign_sender.py, reply_pipeline.py, ghost_manager.py, etc.)
+    see the patched version since they all do:
+        import app.database as _db
 
     Usage:
         db_session, unpatch = patch_db(scheduler_module)
@@ -118,12 +123,11 @@ def patch_db(scheduler_module):
             unpatch()
     """
     from unittest.mock import patch as _patch
+    import app.database as real_db
 
-    fake_module = MagicMock()
     session = FakeAsyncSession()
-    fake_module.async_session_factory = MagicMock(return_value=session)
 
-    patcher = _patch.object(scheduler_module, "_db", fake_module)
+    patcher = _patch.object(real_db, "async_session_factory", MagicMock(return_value=session))
     patcher.start()
 
     return session, patcher.stop
@@ -539,7 +543,7 @@ async def test_ghost_recovery_cancelled_by_reply():
            .with_get_result(Deal, deal_id, deal) \
            .with_get_result(Buyer, buyer_id, buyer)
 
-    with patch("app.services.scheduler.check_for_replies") as mock_check, \
+    with patch("app.services.scheduler.reply_pipeline.check_for_replies") as mock_check, \
          patch("app.services.reply_processor.groq_chat_completion") as mock_groq, \
          patch("app.services.reply_processor.audit") as mock_audit:
 
