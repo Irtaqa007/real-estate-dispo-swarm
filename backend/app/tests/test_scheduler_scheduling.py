@@ -96,56 +96,49 @@ def _patch_db(campaigns_to_return, deal, buyer, replied_exists=False, prev_is_se
     """Return factory patch + mock db reference for process_scheduled_campaigns."""
 
     class FakeSession:
-        """Fake async context manager returning a pre-configured mock db session."""
+        """Fake async context manager returning a pre-configured mock db session.
+
+        Fixes two issues from the original mock:
+        1. db.get() now returns the actual Deal/Buyer objects, not AsyncMock
+        2. SQL string matching no longer depends on literal values ("Queued",
+           "Replied") which SQLAlchemy renders as bind parameters like :status_1.
+           Instead it matches on structural SQL patterns:
+           - Queued query: sent_at IS NULL + scheduled_send_at
+           - Previous touch: touch_number
+           - Replied check: any other FROM campaigns query
+        """
 
         def __init__(self):
             self.db = AsyncMock()
+
+            # Fix db.get() — return actual Deal/Buyer objects instead of AsyncMock
+            async def _mock_get(model, pk):
+                if model is Deal:
+                    return deal
+                if model is Buyer:
+                    return buyer
+                return None
+
+            self.db.get = AsyncMock(side_effect=_mock_get)
             self.db.add = MagicMock()
             self.db.add_all = MagicMock()
             self.db.commit = AsyncMock()
             self.db.rollback = AsyncMock()
 
             def execute_side_effect(*args, **kwargs):
-                # sql may be a Select object; use is not None check
                 sql = args[0] if args else None
                 sql_str = str(sql) if sql is not None else ""
 
-                # ── Queued campaigns query ──
-                if "Queued" in sql_str and "scheduled_send_at" in sql_str:
+                # ── Queued campaigns query (distinct: sent_at IS NULL + scheduled_send_at) ──
+                if "sent_at" in sql_str and "IS NULL" in sql_str and "scheduled_send_at" in sql_str:
                     result = MagicMock()
                     result.scalars = MagicMock(return_value=result)
                     result.all = MagicMock(return_value=campaigns_to_return)
                     return result
 
-                # ── Deal fetch ──
-                if "FROM deals" in sql_str:
-                    result = MagicMock()
-                    result.scalar_one_or_none = MagicMock(return_value=deal)
-                    return result
-
-                # ── Buyer fetch ──
-                if "FROM buyers" in sql_str:
-                    result = MagicMock()
-                    result.scalar_one_or_none = MagicMock(return_value=buyer)
-                    return result
-
-                # ── Replied check: `select(Campaign).where(..., Campaign.status == "Replied")` ──
-                if '"Replied"' in sql_str or "Replied" in sql_str:
-                    result = MagicMock()
-                    if replied_exists:
-                        result.first = MagicMock(return_value=MagicMock())
-                        result.scalar_one_or_none = MagicMock(return_value=MagicMock())
-                    else:
-                        result.first = MagicMock(return_value=None)
-                        result.scalar_one_or_none = MagicMock(return_value=None)
-                    # Fallback for scalars().all()
-                    result.scalars = MagicMock(return_value=result)
-                    result.all = MagicMock(return_value=[])
-                    return result
-
-                # ── Previous touch check: `select(Campaign).where(..., Campaign.touch_number == N-1)` ──
-                # This has the pattern `touch_number = :touch_number_1` or similar in the SQL
-                if "touch_number" in sql_str:
+                # ── Previous touch check (distinct: touch_number in WHERE clause,
+                #    not in SELECT column list — use "touch_number = ") ──
+                if "touch_number =" in sql_str:
                     result = MagicMock()
                     if prev_is_sent:
                         prev = MagicMock(spec=Campaign)
@@ -154,6 +147,18 @@ def _patch_db(campaigns_to_return, deal, buyer, replied_exists=False, prev_is_se
                         result.scalar_one_or_none = MagicMock(return_value=prev)
                     else:
                         result.scalar_one_or_none = MagicMock(return_value=None)
+                    return result
+
+                # ── Replied check (any other FROM campaigns query) ──
+                # Note: SQL has \r\n newlines around FROM clause
+                if "from campaigns" in sql_str.lower():
+                    result = MagicMock()
+                    if replied_exists:
+                        result.first = MagicMock(return_value=MagicMock())
+                    else:
+                        result.first = MagicMock(return_value=None)
+                    result.scalars = MagicMock(return_value=result)
+                    result.all = MagicMock(return_value=[])
                     return result
 
                 # ── Default fallback ──
