@@ -158,6 +158,8 @@ export default function DealDetailPage() {
   const [pausing, setPausing] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [pauseReason, setPauseReason] = useState("");
+  const [pauseSuccess, setPauseSuccess] = useState<string | null>(null);
+  const [resumeSuccess, setResumeSuccess] = useState<string | null>(null);
   // Expiry date state
   const [expiryDate, setExpiryDate] = useState<string>("");
   const [expirySaving, setExpirySaving] = useState(false);
@@ -212,6 +214,7 @@ export default function DealDetailPage() {
 
   async function handlePause() {
     setPausing(true);
+    setPauseSuccess(null);
     try {
       await apiFetch(`/api/campaigns/${dealId}/pause`, {
         method: "POST",
@@ -221,6 +224,8 @@ export default function DealDetailPage() {
       const updated = await apiFetch<Deal>(`/api/deals/${dealId}`);
       setDeal(updated);
       setPauseReason("");
+      setPauseSuccess("Campaign paused");
+      setTimeout(() => setPauseSuccess(null), 2500);
     } catch (e) {
       console.error(e);
     } finally {
@@ -253,12 +258,15 @@ export default function DealDetailPage() {
 
   async function handleResume() {
     setResuming(true);
+    setResumeSuccess(null);
     try {
       await apiFetch(`/api/campaigns/${dealId}/resume`, {
         method: "POST",
       });
       const updated = await apiFetch<Deal>(`/api/deals/${dealId}`);
       setDeal(updated);
+      setResumeSuccess("Campaign resumed");
+      setTimeout(() => setResumeSuccess(null), 2500);
     } catch (e) {
       console.error(e);
     } finally {
@@ -358,6 +366,19 @@ export default function DealDetailPage() {
               <span className={`w-2 h-2 rounded-full ${statusConf.dot}`} />
               {statusConf.label}
             </span>
+            {/* Pause/Resume toasts */}
+            {pauseSuccess && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs animate-in fade-in slide-in-from-top-1">
+                <CheckCircle className="w-3.5 h-3.5" />
+                {pauseSuccess}
+              </div>
+            )}
+            {resumeSuccess && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs animate-in fade-in slide-in-from-top-1">
+                <CheckCircle className="w-3.5 h-3.5" />
+                {resumeSuccess}
+              </div>
+            )}
             {/* Pause/Resume buttons */}
             {(deal.status === "Campaign Launched" || deal.status === "Available") && (
               <div className="flex items-center gap-2 mt-2">

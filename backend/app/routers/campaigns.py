@@ -661,6 +661,124 @@ async def get_campaign(campaign_id: uuid.UUID, db: AsyncSession = Depends(get_db
     return campaign
 
 
+# ---------------------------------------------------------------------------
+# Campaign pause / resume — must come BEFORE /{deal_id}/launch and other
+# /{deal_id} routes to prevent "pause"/"resume" from being incorrectly
+# matched as a campaign_id path parameter on earlier routes.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{deal_id}/pause")
+async def pause_campaigns(
+    deal_id: uuid.UUID,
+    body: dict = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Pause all Queued campaigns for a deal and set deal status to Paused."""
+    reason = ""
+    if body and isinstance(body, dict):
+        reason = body.get("reason", "") or ""
+
+    deal = await db.get(Deal, deal_id)
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    # Find all Queued campaigns for this deal
+    queued_result = await db.execute(
+        select(Campaign).where(
+            Campaign.deal_id == deal_id,
+            Campaign.status == "Queued",
+        )
+    )
+    queued_campaigns = queued_result.scalars().all()
+
+    paused_count = 0
+    for c in queued_campaigns:
+        c.status = "Paused"
+        db.add(c)
+        paused_count += 1
+
+    deal.status = "Paused"
+    db.add(deal)
+
+    # Log to activity_log
+    log_entry = ActivityLog(
+        id=uuid.uuid4(),
+        entity_type="deal",
+        entity_id=deal_id,
+        action="campaign_paused",
+        metadata_json={
+            "paused_count": paused_count,
+            "reason": reason if reason else "manual_pause",
+            "deal_id": str(deal_id),
+            "deal_address": deal.address,
+        },
+    )
+    db.add(log_entry)
+
+    await db.commit()
+
+    logger.info(
+        "Paused %d campaigns for deal %s (%s)%s",
+        paused_count, deal_id, deal.address,
+        f" — reason: {reason}" if reason else "",
+    )
+
+    return {"paused_count": paused_count, "deal_id": str(deal_id)}
+
+
+@router.post("/{deal_id}/resume")
+async def resume_campaigns(
+    deal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resume all Paused campaigns for a deal and set deal back to Campaign Launched."""
+    deal = await db.get(Deal, deal_id)
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    # Find all Paused campaigns for this deal
+    paused_result = await db.execute(
+        select(Campaign).where(
+            Campaign.deal_id == deal_id,
+            Campaign.status == "Paused",
+        )
+    )
+    paused_campaigns = paused_result.scalars().all()
+
+    resumed_count = 0
+    for c in paused_campaigns:
+        c.status = "Queued"
+        db.add(c)
+        resumed_count += 1
+
+    deal.status = "Campaign Launched"
+    db.add(deal)
+
+    # Log to activity_log
+    log_entry = ActivityLog(
+        id=uuid.uuid4(),
+        entity_type="deal",
+        entity_id=deal_id,
+        action="campaign_resumed",
+        metadata_json={
+            "resumed_count": resumed_count,
+            "deal_id": str(deal_id),
+            "deal_address": deal.address,
+        },
+    )
+    db.add(log_entry)
+
+    await db.commit()
+
+    logger.info(
+        "Resumed %d campaigns for deal %s (%s)",
+        resumed_count, deal_id, deal.address,
+    )
+
+    return {"resumed_count": resumed_count, "deal_id": str(deal_id)}
+
+
 @router.post(
     "/{deal_id}/launch",
     status_code=status.HTTP_201_CREATED,
@@ -1342,113 +1460,3 @@ async def send_all_campaigns(
     )
 
 
-# ---------------------------------------------------------------------------
-# Campaign pause / resume
-# ---------------------------------------------------------------------------
-
-
-@router.post("/{deal_id}/pause")
-async def pause_campaigns(
-    deal_id: uuid.UUID,
-    body: dict = {},
-    db: AsyncSession = Depends(get_db),
-):
-    """Pause all Queued campaigns for a deal and set deal status to Paused."""
-    reason = body.get("reason", "") if isinstance(body, dict) else ""
-
-    deal = await db.get(Deal, deal_id)
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    # Find all Queued campaigns for this deal
-    queued_result = await db.execute(
-        select(Campaign).where(
-            Campaign.deal_id == deal_id,
-            Campaign.status == "Queued",
-        )
-    )
-    queued_campaigns = queued_result.scalars().all()
-
-    paused_count = 0
-    for c in queued_campaigns:
-        c.status = "Paused"
-        db.add(c)
-        paused_count += 1
-
-    deal.status = "Paused"
-    db.add(deal)
-
-    # Log to activity_log
-    log_entry = ActivityLog(
-        id=uuid.uuid4(),
-        entity_type="deal",
-        entity_id=deal_id,
-        action="campaign_paused",
-        metadata_json={
-            "paused_count": paused_count,
-            "reason": reason if reason else "manual_pause",
-            "deal_address": deal.address,
-        },
-    )
-    db.add(log_entry)
-
-    await db.commit()
-
-    logger.info(
-        "Paused %d campaigns for deal %s (%s)%s",
-        paused_count, deal_id, deal.address,
-        f" — reason: {reason}" if reason else "",
-    )
-
-    return {"paused_count": paused_count}
-
-
-@router.post("/{deal_id}/resume")
-async def resume_campaigns(
-    deal_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """Resume all Paused campaigns for a deal and set deal back to Campaign Launched."""
-    deal = await db.get(Deal, deal_id)
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    # Find all Paused campaigns for this deal
-    paused_result = await db.execute(
-        select(Campaign).where(
-            Campaign.deal_id == deal_id,
-            Campaign.status == "Paused",
-        )
-    )
-    paused_campaigns = paused_result.scalars().all()
-
-    resumed_count = 0
-    for c in paused_campaigns:
-        c.status = "Queued"
-        db.add(c)
-        resumed_count += 1
-
-    deal.status = "Campaign Launched"
-    db.add(deal)
-
-    # Log to activity_log
-    log_entry = ActivityLog(
-        id=uuid.uuid4(),
-        entity_type="deal",
-        entity_id=deal_id,
-        action="campaign_resumed",
-        metadata_json={
-            "resumed_count": resumed_count,
-            "deal_address": deal.address,
-        },
-    )
-    db.add(log_entry)
-
-    await db.commit()
-
-    logger.info(
-        "Resumed %d campaigns for deal %s (%s)",
-        resumed_count, deal_id, deal.address,
-    )
-
-    return {"resumed_count": resumed_count}
