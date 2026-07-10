@@ -5,6 +5,7 @@ import {
   Building2,
   Users,
   Send,
+  Mail,
   DollarSign,
   TrendingUp,
   Target,
@@ -84,6 +85,28 @@ interface Campaign {
   scheduled_send_at: string | null;
 }
 
+interface DashboardStats {
+  deals: {
+    available: number;
+    launched: number;
+    under_contract: number;
+    closed: number;
+  };
+  today: {
+    emails_sent: number;
+    replies_received: number;
+  };
+  active: {
+    conversations: number;
+    contract_ready: number;
+  };
+  conversion: {
+    total_pitched: number;
+    total_contracts: number;
+    rate_pct: number;
+  };
+}
+
 interface SendingStatus {
   sends_today: number;
   daily_cap: number;
@@ -156,6 +179,7 @@ export default function Dashboard() {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [sendingStatus, setSendingStatus] = useState<SendingStatus | null>(null);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -163,16 +187,18 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [dealsData, buyersData, campaignsData, sendingData] = await Promise.all([
+      const [dealsData, buyersData, campaignsData, sendingData, statsData] = await Promise.all([
         apiFetch<Deal[]>("/api/deals"),
         apiFetch<Buyer[]>("/api/buyers"),
         apiFetch<Campaign[]>("/api/campaigns"),
         apiFetch<SendingStatus>("/api/sending/status").catch(() => null),
+        apiFetch<DashboardStats>("/api/dashboard/stats"),
       ]);
       setDeals(dealsData);
       setBuyers(buyersData);
       setCampaigns(campaignsData);
       setSendingStatus(sendingData);
+      setDashboardStats(statsData);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -184,8 +210,8 @@ export default function Dashboard() {
     loadData();
   }, [loadData]);
 
-  // Auto-refresh every 60s
-  usePolling(loadData, 60000);
+  // Auto-refresh every 30s
+  usePolling(loadData, 30000);
 
   // -----------------------------------------------------------------------
   // Computed stats
@@ -302,39 +328,54 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mt-4">
             <StatCard
-              title="Active Deals"
-              value={activeDeals.length}
-              subtitle={`${deals.filter(d => d.status === "Campaign Launched").length} in campaign`}
+              title="Available Deals"
+              value={dashboardStats?.deals.available ?? 0}
+              subtitle={`${dashboardStats?.deals.launched ?? 0} active campaigns`}
               icon={<Building2 className="w-4 h-4" />}
               color="blue"
               delay={0}
             />
             <StatCard
-              title="Under Contract"
-              value={underContract.length}
-              subtitle={`${soldDeals.length} total sold`}
-              icon={<Target className="w-4 h-4" />}
+              title="Active Campaigns"
+              value={dashboardStats?.deals.launched ?? 0}
+              subtitle={`${dashboardStats?.deals.under_contract ?? 0} under contract`}
+              icon={<Send className="w-4 h-4" />}
               color="amber"
               delay={50}
             />
             <StatCard
-              title="Active Buyers"
-              value={activeBuyers.length}
-              subtitle={`${replyRate}% reply rate`}
-              icon={<Users className="w-4 h-4" />}
-              color="emerald"
-              trend={{ value: `${repliesReceived.length} replies`, up: replyRate > 30 }}
+              title="Emails Today"
+              value={dashboardStats?.today.emails_sent ?? 0}
+              subtitle={`${dashboardStats?.today.replies_received ?? 0} replies today`}
+              icon={<Mail className="w-4 h-4" />}
+              color="blue"
               delay={100}
             />
             <StatCard
-              title="Total Value"
-              value={formatCurrency(totalEarned + totalPotentialSpread)}
-              subtitle={`${formatCurrency(totalEarned)} your cut earned`}
-              icon={<DollarSign className="w-4 h-4" />}
-              color="purple"
+              title="Replies Today"
+              value={dashboardStats?.today.replies_received ?? 0}
+              subtitle={`${dashboardStats?.conversion.rate_pct ?? 0}% conversion`}
+              icon={<CheckCircle2 className="w-4 h-4" />}
+              color={dashboardStats && dashboardStats.today.replies_received > 0 ? "emerald" : "blue"}
               delay={150}
+            />
+            <StatCard
+              title="Active Conversations"
+              value={dashboardStats?.active.conversations ?? 0}
+              subtitle="In negotiation"
+              icon={<Users className="w-4 h-4" />}
+              color={dashboardStats && dashboardStats.active.conversations > 0 ? "amber" : "blue"}
+              delay={200}
+            />
+            <StatCard
+              title="Contract Ready"
+              value={dashboardStats?.active.contract_ready ?? 0}
+              subtitle={`${dashboardStats?.deals.closed ?? 0} total closed`}
+              icon={<Target className="w-4 h-4" />}
+              color={dashboardStats && dashboardStats.active.contract_ready > 0 ? "emerald" : "blue"}
+              delay={250}
             />
           </div>
         </section>

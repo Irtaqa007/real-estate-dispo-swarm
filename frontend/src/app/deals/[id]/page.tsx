@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/api";
 import {
   ArrowLeft, Building2, DollarSign, Wrench, TrendingUp,
   Users, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp,
-  Plus, X, AlertCircle
+  Plus, X, AlertCircle, MessageSquare, Send, CheckCircle
 } from "lucide-react";
 
 interface Deal {
@@ -121,6 +121,13 @@ export default function DealDetailPage() {
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Manual reply modal state
+  const [replyTarget, setReplyTarget] = useState<Campaign | null>(null);
+  const [replyMessage, setReplyMessage] = useState("");
+  const [replySending, setReplySending] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [replySuccess, setReplySuccess] = useState<string | null>(null);
+
   const [showTCForm, setShowTCForm] = useState(false);
   const [tcSaving, setTcSaving] = useState(false);
   const [tcForm, setTcForm] = useState({
@@ -161,6 +168,37 @@ export default function DealDetailPage() {
     }
     load();
   }, [dealId]);
+
+  async function sendManualReply() {
+    if (!replyTarget || !replyMessage.trim()) return;
+    setReplySending(true);
+    setReplyError(null);
+    setReplySuccess(null);
+    try {
+      await apiFetch(`/api/campaigns/${replyTarget.id}/manual-reply`, {
+        method: "POST",
+        body: JSON.stringify({ message: replyMessage.trim() }),
+      });
+      setReplySuccess(`Reply sent to ${buyers[replyTarget.buyer_id]?.full_name || replyTarget.buyer_id}`);
+      // Update the local campaign state to reflect the manual reply
+      setCampaigns(prev =>
+        prev.map(c =>
+          c.id === replyTarget.id
+            ? { ...c, reply_body: `MANUAL: ${replyMessage.trim()}`, conversation_stage: c.conversation_stage === "pitching" ? "replied" : c.conversation_stage }
+            : c
+        )
+      );
+      setReplyMessage("");
+      setTimeout(() => {
+        setReplyTarget(null);
+        setReplySuccess(null);
+      }, 2000);
+    } catch (err: any) {
+      setReplyError(err.message);
+    } finally {
+      setReplySending(false);
+    }
+  }
 
   async function saveTitleCompany() {
     setTcSaving(true);
@@ -388,6 +426,22 @@ export default function DealDetailPage() {
                           <span className={`px-2 py-0.5 rounded-full text-xs ${stageColor[stage] || "bg-slate-700 text-slate-400"}`}>{stage}</span>
                         </div>
                         <div className="flex items-center gap-3 flex-shrink-0 ml-3">
+                          {(c.status === "Sent" || c.status === "Replied") && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setReplyTarget(c);
+                                setReplyMessage("");
+                                setReplyError(null);
+                                setReplySuccess(null);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 transition-colors"
+                              title="Send manual reply"
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              Reply
+                            </button>
+                          )}
                           {c.reply_received_at && (
                             <span className="text-xs text-emerald-400">Replied {fmtDate(c.reply_received_at)}</span>
                           )}
@@ -447,6 +501,107 @@ export default function DealDetailPage() {
             </div>
           )}
         </div>
+
+        {/* Manual Reply Modal */}
+        {replyTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !replySending && setReplyTarget(null)} />
+            <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-slate-700/50 bg-slate-900 shadow-2xl">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/50">
+                <h2 className="text-base font-semibold text-white">
+                  Manual Reply
+                </h2>
+                <button
+                  onClick={() => setReplyTarget(null)}
+                  disabled={replySending}
+                  className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-700 transition-colors disabled:opacity-50"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="px-5 py-4 space-y-4">
+                {/* Recipient info */}
+                <div className="flex items-center gap-2 text-sm text-slate-400">
+                  <MessageSquare className="w-4 h-4 text-blue-400" />
+                  <span>
+                    Replying to{" "}
+                    <span className="font-medium text-white">
+                      {buyers[replyTarget.buyer_id]?.full_name || "Buyer"}
+                    </span>
+                    {replyTarget.subject && (
+                      <span className="text-slate-500"> — {replyTarget.subject}</span>
+                    )}
+                  </span>
+                </div>
+
+                {/* Textarea */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1.5">
+                    Your Message
+                  </label>
+                  <textarea
+                    className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-800/50 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-colors min-h-[120px] resize-y"
+                    placeholder="Type your reply here..."
+                    value={replyMessage}
+                    onChange={(e) => setReplyMessage(e.target.value)}
+                    disabled={replySending}
+                    autoFocus
+                  />
+                  <p className="text-[10px] text-slate-600 mt-1">
+                    Will be signed with your operator name
+                  </p>
+                </div>
+
+                {/* Error */}
+                {replyError && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{replyError}</span>
+                  </div>
+                )}
+
+                {/* Success */}
+                {replySuccess && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
+                    <CheckCircle className="w-4 h-4 shrink-0" />
+                    <span>{replySuccess}</span>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex justify-end gap-3 pt-2 border-t border-slate-700/50">
+                  <button
+                    onClick={() => setReplyTarget(null)}
+                    disabled={replySending}
+                    className="px-4 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={sendManualReply}
+                    disabled={replySending || !replyMessage.trim()}
+                    className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 transition-colors disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {replySending ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        Send Reply
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

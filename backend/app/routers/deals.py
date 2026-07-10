@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -804,6 +805,148 @@ async def mark_deal_paid(
         shared_links_revoked=shared_links_revoked,
         message="Payment confirmed and deal folder archived.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get("/pipeline")
+async def deal_pipeline(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all deals grouped by pipeline stage with campaign summaries.
+
+    Each deal includes aggregated campaign counts and a derived pipeline stage
+    based on the highest conversation_stage or deal status.
+
+    Returns:
+        List of dicts ordered by last_activity_at DESC.
+    """
+    # Fetch all deals
+    deal_result = await db.execute(
+        select(Deal).order_by(Deal.created_at.desc())
+    )
+    deals = deal_result.scalars().all()
+
+    # Fetch all campaign counts grouped by deal_id
+    from sqlalchemy import func as sa_func
+
+    campaign_agg = await db.execute(
+        select(
+            Campaign.deal_id,
+            sa_func.count(Campaign.id).label("total"),
+            sa_func.count(Campaign.id).filter(Campaign.status == "Sent").label("sent"),
+            sa_func.count(Campaign.id).filter(Campaign.status == "Replied").label("replied"),
+            sa_func.count(Campaign.id).filter(Campaign.status == "Passed").label("passed"),
+            sa_func.count(Campaign.id).filter(Campaign.status == "Contract_Pending").label("contract"),
+            sa_func.max(Campaign.sent_at).label("last_sent_at"),
+            sa_func.max(Campaign.reply_received_at).label("last_reply_at"),
+        )
+        .group_by(Campaign.deal_id)
+    )
+    agg_rows = campaign_agg.all()
+
+    # Fetch conversation_stages per deal
+    stage_result = await db.execute(
+        select(
+            Campaign.deal_id,
+            Campaign.conversation_stage,
+        )
+    )
+    stage_rows = stage_result.all()
+
+    # Build lookup: deal_id -> list of conversation stages
+    deal_stages: dict[str, list[str]] = defaultdict(list)
+    for row in stage_rows:
+        if row.conversation_stage:
+            deal_stages[str(row.deal_id)].append(row.conversation_stage)
+
+    # Stage priority ordering (highest to lowest)
+    STAGE_PRIORITY = [
+        "contract_ready",
+        "collecting_info",
+        "qualifying",
+        "engaging",
+        "pitching",
+    ]
+
+    def _get_highest_stage(stages: list[str]) -> str | None:
+        """Return the highest-priority conversation stage from the list."""
+        for priority in STAGE_PRIORITY:
+            if priority in stages:
+                return priority
+        return None
+
+    # Build agg lookup
+    agg_map: dict[str, dict] = {}
+    for row in agg_rows:
+        did = str(row.deal_id)
+        agg_map[did] = {
+            "campaigns_total": row.total,
+            "campaigns_sent": row.sent,
+            "campaigns_replied": row.replied,
+            "campaigns_passed": row.passed,
+            "campaigns_contract": row.contract,
+            "last_sent_at": row.last_sent_at.isoformat() if row.last_sent_at else None,
+            "last_reply_at": row.last_reply_at.isoformat() if row.last_reply_at else None,
+        }
+
+    results = []
+    for deal in deals:
+        did = str(deal.id)
+        agg = agg_map.get(did, {})
+        stages = deal_stages.get(did, [])
+        highest_stage = _get_highest_stage(stages)
+
+        # Determine pipeline stage
+        if deal.status in ("Sold", "Under Contract", "Dead"):
+            stage = "Closed"
+        elif agg.get("campaigns_contract", 0) > 0 or "contract_ready" in stages:
+            stage = "Contract Ready"
+        elif highest_stage in ("qualifying", "collecting_info"):
+            stage = "Negotiating"
+        elif agg.get("campaigns_replied", 0) > 0:
+            stage = "Replied"
+        elif deal.status == "Campaign Launched":
+            stage = "Launched"
+        else:
+            stage = "Available"
+
+        # Determine last activity
+        last_activity = deal.created_at.isoformat() if deal.created_at else None
+        if agg.get("last_reply_at"):
+            last_activity = agg["last_reply_at"]
+        elif agg.get("last_sent_at"):
+            last_activity = agg["last_sent_at"]
+
+        results.append({
+            "deal_id": did,
+            "address": deal.address,
+            "city": deal.city,
+            "state": deal.state,
+            "property_type": deal.property_type,
+            "asking_price": float(deal.asking_price) if deal.asking_price else 0,
+            "arv": float(deal.arv) if deal.arv else 0,
+            "status": deal.status,
+            "campaigns_total": agg.get("campaigns_total", 0),
+            "campaigns_sent": agg.get("campaigns_sent", 0),
+            "campaigns_replied": agg.get("campaigns_replied", 0),
+            "campaigns_passed": agg.get("campaigns_passed", 0),
+            "campaigns_contract": agg.get("campaigns_contract", 0),
+            "stage": stage,
+            "created_at": deal.created_at.isoformat() if deal.created_at else None,
+            "last_activity_at": last_activity,
+        })
+
+    # Sort by last_activity_at DESC, nulls last
+    results.sort(
+        key=lambda r: r["last_activity_at"] or "",
+        reverse=True,
+    )
+
+    return results
 
 
 # ---------------------------------------------------------------------------

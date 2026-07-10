@@ -959,6 +959,113 @@ async def launch_campaign(
     )
 
 
+@router.post("/{campaign_id}/manual-reply")
+async def manual_reply(
+    campaign_id: uuid.UUID,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a manual reply to a buyer's campaign conversation.
+
+    Allows the operator to craft a custom reply that is sent directly to
+    the buyer via Gmail. Only available on campaigns with Sent or Replied status.
+
+    Args:
+        campaign_id: UUID of the campaign to reply on.
+        body: JSON body with "message" field containing the reply text.
+
+    Returns:
+        dict with success status and recipient email.
+    """
+    message = body.get("message", "").strip()
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="message field is required and cannot be empty",
+        )
+
+    # 1. Load campaign
+    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
+    campaign = result.scalar_one_or_none()
+    if not campaign:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Campaign with id '{campaign_id}' not found",
+        )
+
+    if campaign.status not in ("Sent", "Replied"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Campaign status is '{campaign.status}', must be 'Sent' or 'Replied' to send a manual reply",
+        )
+
+    # 2. Load buyer email
+    buyer_result = await db.execute(select(Buyer).where(Buyer.id == campaign.buyer_id))
+    buyer = buyer_result.scalar_one_or_none()
+    if not buyer or not buyer.email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Buyer with id '{campaign.buyer_id}' not found or has no email",
+        )
+
+    # 3. Send email
+    reply_subject = f"Re: {campaign.subject}" if campaign.subject else "Re: Your inquiry"
+    reply_body = f"{message}\n\nBest,\n{settings.operator_name}"
+
+    try:
+        send_result = await send_email(
+            to=buyer.email,
+            subject=reply_subject,
+            body=reply_body,
+            campaign_id=campaign.id.hex,
+            send_type="reply",
+        )
+
+        if send_result.get("status") != "sent":
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Email send failed: {send_result.get('reason', 'unknown error')}",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to send manual reply for campaign %s: %s", campaign_id, e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to send email: {str(e)[:200]}",
+        )
+
+    # 4. Update campaign
+    campaign.reply_body = f"MANUAL: {message}"
+    if campaign.conversation_stage == "pitching":
+        campaign.conversation_stage = "replied"
+    db.add(campaign)
+
+    # 5. Log to activity_log
+    log_entry = ActivityLog(
+        id=uuid.uuid4(),
+        entity_type="campaign",
+        entity_id=campaign.id,
+        action="manual_reply_sent",
+        metadata_json={
+            "sent_to": buyer.email,
+            "subject": reply_subject,
+            "buyer_id": str(campaign.buyer_id),
+            "deal_id": str(campaign.deal_id),
+        },
+    )
+    db.add(log_entry)
+
+    await db.commit()
+
+    logger.info(
+        "Manual reply sent for campaign %s (touch %d) to %s",
+        campaign_id, campaign.touch_number, buyer.email,
+    )
+
+    return {"success": True, "sent_to": buyer.email}
+
+
 @router.post("/{campaign_id}/send", response_model=SendResponse)
 async def send_campaign_email(
     campaign_id: uuid.UUID,

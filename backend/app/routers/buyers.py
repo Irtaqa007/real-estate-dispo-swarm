@@ -153,6 +153,32 @@ async def list_buyers(
     return buyers
 
 
+@router.get("/opted-out")
+async def list_opted_out_buyers(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return list of buyers who have opted out (status = 'Do Not Contact' or unsubscribed_at IS NOT NULL)."""
+    result = await db.execute(
+        select(Buyer)
+        .where(
+            (Buyer.unsubscribed_at.isnot(None))
+            | (Buyer.status == "Do Not Contact")
+        )
+        .order_by(Buyer.unsubscribed_at.desc().nullslast())
+    )
+    buyers = result.scalars().all()
+    return [
+        {
+            "id": str(b.id),
+            "full_name": b.full_name,
+            "email": b.email,
+            "unsubscribed_at": b.unsubscribed_at.isoformat() if b.unsubscribed_at else None,
+            "status": b.status,
+        }
+        for b in buyers
+    ]
+
+
 @router.get("/{buyer_id}", response_model=BuyerResponse)
 async def get_buyer(buyer_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Get a single buyer by UUID."""
@@ -441,6 +467,59 @@ async def opt_out_buyer(
     )
 
     return {"status": "opted_out", "buyer_id": str(buyer_id), "email": buyer.email}
+
+
+@router.delete("/{buyer_id}/opt-out")
+async def resubscribe_buyer(
+    buyer_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-subscribe an opted-out buyer — clear unsubscribed_at and set status to Active.
+
+    This reverses a previous opt-out action, allowing the buyer to receive
+    campaign emails again.
+
+    Args:
+        buyer_id: UUID of the buyer to re-subscribe.
+
+    Returns:
+        dict with success status.
+    """
+    result = await db.execute(
+        select(Buyer).options(selectinload(Buyer.buyer_emails)).where(Buyer.id == buyer_id)
+    )
+    buyer = result.scalar_one_or_none()
+    if not buyer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Buyer with id '{buyer_id}' not found",
+        )
+
+    buyer.unsubscribed_at = None
+    buyer.status = "Active"
+    db.add(buyer)
+
+    # Log to activity_log
+    log_entry = ActivityLog(
+        id=uuid.uuid4(),
+        entity_type="buyer",
+        entity_id=buyer_id,
+        action="resubscribed",
+        metadata_json={
+            "email": buyer.email,
+            "full_name": buyer.full_name,
+        },
+    )
+    db.add(log_entry)
+
+    await db.commit()
+
+    logger.info(
+        "Buyer %s (%s) re-subscribed",
+        buyer_id, buyer.email,
+    )
+
+    return {"success": True}
 
 
 @router.delete("/{buyer_id}", status_code=status.HTTP_204_NO_CONTENT)

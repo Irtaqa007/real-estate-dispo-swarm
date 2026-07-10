@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useCallback } from "react";
-import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight, AlertTriangle, FileText } from "lucide-react";
+import { Users, Home, LayoutDashboard, Building2, Send, Activity, BarChart3, ChevronRight, AlertTriangle, FileText, Kanban, Ban } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/buyers", label: "Buyers", icon: Users },
+  { href: "/opt-out", label: "Opt-Out List", icon: Ban },
   { href: "/deals", label: "Deals", icon: Building2 },
   { href: "/jv-partners", label: "JV Partners", icon: Activity },
   { href: "/campaigns", label: "Campaigns", icon: Send },
