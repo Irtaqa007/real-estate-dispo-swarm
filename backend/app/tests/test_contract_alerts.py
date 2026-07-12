@@ -289,8 +289,228 @@ async def test_get_contract_alerts_returns_unresolved():
 
 
 # ===========================================================================
-# End-to-end: scheduler contract_ready alert creation path
+# End-to-end: operator contract alert resolve flow (approve/reject)
 # ===========================================================================
+
+
+class TestOperatorContractAlertFlow:
+    """End-to-end tests for the operator's contract alert resolve flow.
+    Tests the full lifecycle: contract_ready alert → operator resolves."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_contract_alert_with_notes(self):
+        """Resolving with specific notes should store them in metadata."""
+        from app.routers.alerts import resolve_contract_alert
+        from app.schemas import ContractAlertResolveRequest
+
+        alert_id = uuid.uuid4()
+
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "contract_ready"
+        mock_entry.resolved = False
+        mock_entry.resolved_at = None
+        mock_entry.metadata_json = {
+            "alert_type": "contract_ready",
+            "alert_user": True,
+            "buyer": {"name": "Test Buyer"},
+            "deal": {"address": "123 Main St"},
+        }
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = ContractAlertResolveRequest(notes="Sent via DocuSign on 12/15. Buyer signed.")
+        result = await resolve_contract_alert(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+        assert "resolved_at" in result
+        assert mock_entry.resolved is True
+        assert mock_entry.metadata_json["resolution_notes"] == (
+            "Sent via DocuSign on 12/15. Buyer signed."
+        )
+        assert mock_entry.metadata_json["resolved_at"] is not None
+        mock_db.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_contract_alert_wrong_type(self):
+        """Resolving a non-contract-ready alert should return 400."""
+        from app.routers.alerts import resolve_contract_alert
+        from app.schemas import ContractAlertResolveRequest
+        from fastapi import HTTPException
+
+        alert_id = uuid.uuid4()
+
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "negotiation_escalation"  # Wrong action type
+        mock_entry.metadata_json = {}
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = ContractAlertResolveRequest(notes="")
+        with pytest.raises(HTTPException) as exc:
+            await resolve_contract_alert(alert_id, body, db=mock_db)
+
+        assert exc.value.status_code == 400
+        assert "not a contract-ready alert" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_full_contract_alert_lifecycle(self):
+        """Full lifecycle: process_conversation → contract_ready → alert → operator resolves."""
+        from app.services.conversation_engine import process_conversation
+        from app.routers.alerts import resolve_contract_alert
+        from app.schemas import ContractAlertResolveRequest
+
+        deal = MagicMock(spec=Deal)
+        deal.id = uuid.uuid4()
+        deal.address = "1000 Commerce Blvd"
+        deal.city = "Plano"
+        deal.state = "TX"
+        deal.asking_price = 300000.0
+        deal.floor_price = 250000.0
+        deal.contract_price = 220000.0
+        deal.jv_split_percentage = 50.0
+        deal.jv_partner_id = None
+        deal.spread = 80000.0
+        deal.arv = 380000.0
+        deal.repair_estimate = 20000.0
+        deal.condition_description = "Excellent"
+        deal.year_built = 2010
+        deal.status = "Available"
+        deal.property_type = "House"
+        deal.beds = 4
+        deal.baths = 3
+        deal.sqft = 2400
+
+        buyer = MagicMock(spec=Buyer)
+        buyer.id = uuid.uuid4()
+        buyer.full_name = "Sarah Connor"
+        buyer.email = "sarah@example.com"
+
+        campaign = MagicMock(spec=Campaign)
+        campaign.id = uuid.uuid4()
+        campaign.deal_id = deal.id
+        campaign.buyer_id = buyer.id
+        campaign.conversation_stage = "collecting_info"
+        campaign.buyer_legal_name = "Sarah Connor"
+        campaign.buyer_phone = "555-444-3333"
+        campaign.buyer_title_company = "First American Title"
+        campaign.agreed_price = 275000.0
+
+        import json
+        mock_ai = MagicMock()
+        mock_ai.choices = [MagicMock()]
+        mock_ai.choices[0].message.content = json.dumps({
+            "stage": "contract_ready",
+            "pass": False,
+            "unsub": False,
+            "reply": "Perfect — I'll get the paperwork started.",
+            "extracted_legal_name": None,
+            "extracted_phone": None,
+            "extracted_title_company": None,
+            "extracted_agreed_price": None,
+        })
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_ai),
+        ):
+            result = await process_conversation(
+                reply_body="$275k sounds good",
+                reply_subject="Re: Great deal",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        assert result["contract_ready"] is True
+
+        # ── Simulate scheduler creating the ActivityLog alert ──
+        asking = float(deal.asking_price)
+        contract_p = float(deal.contract_price)
+        split_pct = float(deal.jv_split_percentage or 50) / 100
+        assignment_fee = asking - contract_p
+        my_payout = assignment_fee * (1.0 - split_pct)
+
+        alert_id = uuid.uuid4()
+        alert_entry = ActivityLog(
+            id=alert_id,
+            entity_type="deal",
+            entity_id=deal.id,
+            action="contract_ready",
+            metadata_json={
+                "alert_type": "contract_ready",
+                "alert_user": True,
+                "priority": "high",
+                "buyer": {
+                    "name": buyer.full_name,
+                    "email": buyer.email,
+                    "legal_name": campaign.buyer_legal_name,
+                    "phone": campaign.buyer_phone,
+                    "title_company": campaign.buyer_title_company,
+                },
+                "deal": {
+                    "address": deal.address,
+                    "asking_price": asking,
+                    "agreed_price": float(campaign.agreed_price),
+                    "assignment_fee": assignment_fee,
+                    "my_payout": my_payout,
+                    "jv_partner": "",
+                },
+            },
+        )
+
+        # ── Operator resolves the alert with notes ──
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=alert_entry)
+
+        body = ContractAlertResolveRequest(notes="Contract emailed via DocuSign. Buyer confirmed.")
+        resolve_result = await resolve_contract_alert(alert_id, body, db=mock_db)
+
+        assert resolve_result["resolved"] is True
+        assert alert_entry.resolved is True
+        assert alert_entry.metadata_json["resolved_at"] is not None
+        assert alert_entry.metadata_json["resolution_notes"] == (
+            "Contract emailed via DocuSign. Buyer confirmed."
+        )
+
+        # Verify original alert metadata is preserved through the lifecycle
+        assert alert_entry.metadata_json["buyer"]["name"] == "Sarah Connor"
+        assert alert_entry.metadata_json["deal"]["address"] == "1000 Commerce Blvd"
+        assert alert_entry.metadata_json["deal"]["my_payout"] == 40000.0
+
+    @pytest.mark.asyncio
+    async def test_resolve_without_body_works(self):
+        """Resolving without a request body should still work (notes optional)."""
+        from app.routers.alerts import resolve_contract_alert
+
+        alert_id = uuid.uuid4()
+
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "contract_ready"
+        mock_entry.resolved = False
+        mock_entry.resolved_at = None
+        mock_entry.metadata_json = {
+            "alert_type": "contract_ready",
+            "buyer": {},
+            "deal": {},
+        }
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        result = await resolve_contract_alert(alert_id, body=None, db=mock_db)
+
+        assert result["resolved"] is True
+        assert mock_entry.resolved is True
+        assert mock_entry.metadata_json["resolved_at"] is not None
+        # No resolution_notes should be added when body is None
+        assert "resolution_notes" not in mock_entry.metadata_json
+
 
 
 class TestSchedulerContractReadyAlert:

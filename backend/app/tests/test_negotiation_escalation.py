@@ -871,3 +871,377 @@ class TestNegotiationEscalationFlow:
         )
         assert result["new_stage"] == "contract_ready"
         assert result["extracted_info"]["agreed_price"] == 180000
+
+
+# ===========================================================================
+# End-to-end: operator approve/reject flow for negotiation alerts
+# ===========================================================================
+
+
+class TestOperatorNegotiationFlow:
+    """End-to-end tests for the operator's approve/reject flow.
+    Full lifecycle: below-floor counter → alert → operator approves or rejects."""
+
+    @pytest.mark.asyncio
+    async def test_full_approve_flow(self):
+        """Full lifecycle: below-floor counter → alert created → operator approves → campaign updated."""
+        from app.services.conversation_engine import process_conversation
+        from app.routers.alerts import approve_negotiation, NegotiationApproveRequest
+
+        deal = _make_deal(floor_price=180000.0, asking_price=200000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="pitching", deal_id=deal.id, buyer_id=buyer.id)
+
+        # ── Step 1: Buyer counters below floor → escalation created ──
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"engaging","pass":false,"unsub":false,'
+            '"reply":"I can do $150k","extracted_legal_name":null,'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":150000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="I can do $150,000",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        assert result["negotiation_escalation"] is not None
+
+        # ── Step 2: Simulate scheduler creating the ActivityLog alert ──
+        esc = result["negotiation_escalation"]
+        alert_id = uuid.uuid4()
+        alert_entry = MagicMock(spec=ActivityLog)
+        alert_entry.id = alert_id
+        alert_entry.action = "negotiation_escalation"
+        alert_entry.resolved = False
+        alert_entry.resolved_at = None
+        alert_entry.created_at = datetime.now(timezone.utc)
+        alert_entry.metadata_json = {
+            "buyer_id": str(buyer.id),
+            "deal_id": str(deal.id),
+            "campaign_id": str(campaign.id),
+            "counter_price": esc["counter_price"],
+            "floor_price": esc["floor_price"],
+            "gap": esc["gap"],
+            "buyer_email": buyer.email,
+            "deal_address": deal.address,
+            "buyer_name": buyer.full_name,
+        }
+
+        # ── Step 3: Operator approves at $165,000 ──
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(side_effect=lambda model, pk: {
+            ActivityLog: alert_entry,
+            Campaign: campaign,
+            Deal: deal,
+        }.get(model))
+
+        body = NegotiationApproveRequest(final_price=165000.0)
+
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            approve_result = await approve_negotiation(alert_id, body, db=mock_db)
+
+        assert approve_result["resolved"] is True
+        assert approve_result["action"] == "approved"
+        assert approve_result["final_price"] == 165000.0
+        assert approve_result["sent_to"] == "buyer@test.com"
+
+        # Campaign should be updated
+        assert campaign.agreed_price == 165000.0
+        assert campaign.conversation_stage == "collecting_info"
+
+        # Email should have been sent with the approved price
+        send_mock.assert_called_once()
+        call_kwargs = send_mock.call_args.kwargs
+        assert call_kwargs["to"] == "buyer@test.com"
+        assert "165,000" in call_kwargs["body"]
+
+        # Alert resolved
+        assert alert_entry.resolved is True
+        assert alert_entry.resolved_at is not None
+        assert alert_entry.metadata_json["resolution_action"] == "approved"
+        assert alert_entry.metadata_json["final_price"] == 165000.0
+
+    @pytest.mark.asyncio
+    async def test_full_reject_flow(self):
+        """Full lifecycle: below-floor counter → alert → operator rejects → decline sent."""
+        from app.services.conversation_engine import process_conversation
+        from app.routers.alerts import reject_negotiation, NegotiationRejectRequest
+
+        deal = _make_deal(floor_price=180000.0, asking_price=200000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="pitching", deal_id=deal.id, buyer_id=buyer.id)
+
+        # ── Step 1: Below-floor counter ──
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"engaging","pass":false,"unsub":false,'
+            '"reply":"$150k is my max","extracted_legal_name":null,'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":150000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="$150k is my max",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        assert result["negotiation_escalation"] is not None
+
+        # ── Step 2: Simulate scheduler alert creation ──
+        esc = result["negotiation_escalation"]
+        alert_id = uuid.uuid4()
+        alert_entry = MagicMock(spec=ActivityLog)
+        alert_entry.id = alert_id
+        alert_entry.action = "negotiation_escalation"
+        alert_entry.resolved = False
+        alert_entry.resolved_at = None
+        alert_entry.created_at = datetime.now(timezone.utc)
+        alert_entry.metadata_json = {
+            "buyer_id": str(buyer.id),
+            "deal_id": str(deal.id),
+            "campaign_id": str(campaign.id),
+            "counter_price": esc["counter_price"],
+            "floor_price": esc["floor_price"],
+            "gap": esc["gap"],
+            "buyer_email": buyer.email,
+            "deal_address": deal.address,
+            "buyer_name": buyer.full_name,
+        }
+
+        # ── Step 3: Operator rejects without counter ──
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(side_effect=lambda model, pk: {
+            ActivityLog: alert_entry,
+            Deal: None,
+        }.get(model))
+
+        body = NegotiationRejectRequest(counter_offer=None)
+
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            reject_result = await reject_negotiation(alert_id, body, db=mock_db)
+
+        assert reject_result["resolved"] is True
+        assert reject_result["action"] == "declined"
+        assert reject_result["counter_sent"] is None
+
+        # Decline email should have been sent
+        send_mock.assert_called_once()
+        call_kwargs = send_mock.call_args.kwargs
+        assert call_kwargs["to"] == "buyer@test.com"
+        body_text = call_kwargs["body"].lower()
+        assert any(w in body_text for w in ["thanks", "unfortunately", "appreciate"])
+
+        # Alert resolved
+        assert alert_entry.resolved is True
+        assert alert_entry.metadata_json["resolution_action"] == "declined"
+
+    @pytest.mark.asyncio
+    async def test_full_reject_with_counter_flow(self):
+        """Full lifecycle: below-floor counter → alert → operator rejects with counter → counter sent."""
+        from app.services.conversation_engine import process_conversation
+        from app.routers.alerts import reject_negotiation, NegotiationRejectRequest
+
+        deal = _make_deal(floor_price=180000.0, asking_price=200000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="pitching", deal_id=deal.id, buyer_id=buyer.id)
+
+        # ── Step 1: Below-floor counter ──
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"engaging","pass":false,"unsub":false,'
+            '"reply":"Best I can do is $150k","extracted_legal_name":null,'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":150000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="Best I can do is $150k",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        assert result["negotiation_escalation"] is not None
+
+        # ── Step 2: Simulate scheduler alert creation ──
+        esc = result["negotiation_escalation"]
+        alert_id = uuid.uuid4()
+        alert_entry = MagicMock(spec=ActivityLog)
+        alert_entry.id = alert_id
+        alert_entry.action = "negotiation_escalation"
+        alert_entry.resolved = False
+        alert_entry.resolved_at = None
+        alert_entry.created_at = datetime.now(timezone.utc)
+        alert_entry.metadata_json = {
+            "buyer_id": str(buyer.id),
+            "deal_id": str(deal.id),
+            "campaign_id": str(campaign.id),
+            "counter_price": esc["counter_price"],
+            "floor_price": esc["floor_price"],
+            "gap": esc["gap"],
+            "buyer_email": buyer.email,
+            "deal_address": deal.address,
+            "buyer_name": buyer.full_name,
+        }
+
+        # ── Step 3: Operator counters back at $175,000 ──
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(side_effect=lambda model, pk: {
+            ActivityLog: alert_entry,
+            Deal: None,
+        }.get(model))
+
+        body = NegotiationRejectRequest(counter_offer=175000.0)
+
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            reject_result = await reject_negotiation(alert_id, body, db=mock_db)
+
+        assert reject_result["resolved"] is True
+        assert reject_result["action"] == "countered"
+        assert reject_result["counter_sent"] == 175000.0
+
+        # Counter email should have been sent with the counter price
+        send_mock.assert_called_once()
+        call_kwargs = send_mock.call_args.kwargs
+        assert call_kwargs["to"] == "buyer@test.com"
+        body_text = call_kwargs["body"]
+        check = any(s in body_text for s in ["175,000", "$175,000"])
+        assert check, f"Expected counter price 175,000 in body: {body_text[:200]}"
+
+        # Alert resolved
+        assert alert_entry.resolved is True
+        assert alert_entry.metadata_json["resolution_action"] == "countered"
+        assert alert_entry.metadata_json["counter_sent"] == 175000.0
+
+    @pytest.mark.asyncio
+    async def test_approve_nonexistent_alert_404(self):
+        """Approving a nonexistent alert should return 404."""
+        from app.routers.alerts import approve_negotiation, NegotiationApproveRequest
+        from fastapi import HTTPException
+
+        alert_id = uuid.uuid4()
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=None)
+
+        body = NegotiationApproveRequest(final_price=160000.0)
+
+        with pytest.raises(HTTPException) as exc:
+            await approve_negotiation(alert_id, body, db=mock_db)
+
+        assert exc.value.status_code == 404
+        assert "Negotiation alert not found" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_approve_wrong_action_type_400(self):
+        """Approving a non-negotiation alert should return 400."""
+        from app.routers.alerts import approve_negotiation, NegotiationApproveRequest
+        from fastapi import HTTPException
+
+        alert_id = uuid.uuid4()
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "contract_ready"  # Wrong type
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = NegotiationApproveRequest(final_price=160000.0)
+
+        with pytest.raises(HTTPException) as exc:
+            await approve_negotiation(alert_id, body, db=mock_db)
+
+        assert exc.value.status_code == 400
+        assert "not a negotiation alert" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_reject_nonexistent_alert_404(self):
+        """Rejecting a nonexistent alert should return 404."""
+        from app.routers.alerts import reject_negotiation, NegotiationRejectRequest
+        from fastapi import HTTPException
+
+        alert_id = uuid.uuid4()
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=None)
+
+        body = NegotiationRejectRequest(counter_offer=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await reject_negotiation(alert_id, body, db=mock_db)
+
+        assert exc.value.status_code == 404
+        assert "Negotiation alert not found" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_reject_wrong_action_type_400(self):
+        """Rejecting a non-negotiation alert should return 400."""
+        from app.routers.alerts import reject_negotiation, NegotiationRejectRequest
+        from fastapi import HTTPException
+
+        alert_id = uuid.uuid4()
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "contract_ready"  # Wrong type
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = NegotiationRejectRequest(counter_offer=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await reject_negotiation(alert_id, body, db=mock_db)
+
+        assert exc.value.status_code == 400
+        assert "not a negotiation alert" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_approve_alert_missing_campaign_id_400(self):
+        """Approving an alert without campaign_id should return 400."""
+        from app.routers.alerts import approve_negotiation, NegotiationApproveRequest
+        from fastapi import HTTPException
+
+        alert_id = uuid.uuid4()
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "negotiation_escalation"
+        mock_entry.metadata_json = {
+            "buyer_email": "buyer@test.com",
+            # No campaign_id
+        }
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = NegotiationApproveRequest(final_price=160000.0)
+
+        with pytest.raises(HTTPException) as exc:
+            await approve_negotiation(alert_id, body, db=mock_db)
+
+        assert exc.value.status_code == 400
+        assert "missing campaign_id" in exc.value.detail.lower()
