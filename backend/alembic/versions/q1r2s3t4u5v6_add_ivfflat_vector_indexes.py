@@ -35,6 +35,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # ── Bump maintenance_work_mem for the index builds ──
+    # IVFFlat index creation on 1024-dim vectors requires ~41 MB of working
+    # memory per table being indexed. The default maintenance_work_mem on
+    # many managed PostgreSQL instances (e.g. Supabase free tier) is only
+    # 32 MB, which causes ProgramLimitExceededError. This session-level SET
+    # is scoped to this migration's connection and is safe (no SUPERUSER
+    # needed for session-level SET).
+    op.execute("SET maintenance_work_mem = '64MB'")
+
     # ── IVFFlat index on buyers.buy_box_embedding ──
     # Used by matching_service.py:
     #   WHERE ... b.buy_box_embedding IS NOT NULL
