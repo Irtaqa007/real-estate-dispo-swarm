@@ -34,8 +34,50 @@ from app.services.groq_client import groq_chat_completion, extract_json_block
 
 logger = logging.getLogger(__name__)
 
+# Regex to extract dollar amounts from buyer replies as fallback.
+# Group 1 = numeric part (with optional commas), Group 2 = optional k/thousand suffix.
+# Handles: $185,000, $185k, $185000, 185k, 185,000, 185000, $185,000.00
+_PRICE_FALLBACK_RE = re.compile(
+    r'\$?(?:'
+    r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)'  # $185,000 or $185,000.00
+    r'|'
+    r'(\d{4,})'                               # $185000 (no commas, 4+ digits)
+    r')'
+    r'\s*(k|K|thousand)?\b'                  # optional k/thousand suffix
+)
 
 
+def _extract_price_fallback(reply_body: str, known_prices: set[float]) -> Optional[float]:
+    """Extract a dollar amount from reply that the AI might have missed.
+
+    Only extracts if:
+    - The amount looks like a deal price (> $10k)
+    - It doesn't exactly match known deal prices (asking, ARV, repair, floor, contract)
+    This prevents false extraction when the buyer is just repeating deal info.
+    """
+    if not reply_body:
+        return None
+    for match in _PRICE_FALLBACK_RE.finditer(reply_body):
+        # Group 1 = comma-format number, Group 2 = no-comma number, Group 3 = suffix
+        raw_num = match.group(1) or match.group(2) or ""
+        if not raw_num:
+            continue
+        raw = raw_num.replace(",", "")
+        try:
+            price = float(raw)
+        except (ValueError, TypeError):
+            continue
+        # Check for k/thousand suffix (group 3)
+        suffix = (match.group(3) or "").strip().lower()
+        if suffix in ("k", "thousand"):
+            price *= 1000
+        # Skip if it matches a known deal price exactly
+        if price in known_prices:
+            continue
+        # Must be in a reasonable price range ($10k - $10M)
+        if 10000 <= price <= 10_000_000:
+            return price
+    return None
 
 
 async def process_conversation(
@@ -55,23 +97,42 @@ async def process_conversation(
     """
     current_stage = campaign.conversation_stage or "pitching"
 
-    # ── Pre-checks (no AI needed) ────────────────────────────────────────────
+    # ── Pre-checks (regex-based, context-aware) ───────────────────────────────
+    # Uses word-boundary regex patterns instead of brittle substring matching
+    # so variations like "opt me out", "opting out", "don't contact" are all caught.
     reply_lower = reply_body.lower().strip()
 
-    _UNSUB = ["unsubscribe","remove me","take me off","stop contacting",
-              "do not contact","opt out","stop emailing"]
-    _PASS  = ["not for me","i'll pass","i will pass","pass on this","not interested",
-              "no thanks","no thank you","doesn't fit","not buying","not in the market",
-              "stop reaching out","price is too high","pass on","no thanks","pass"]
+    _UNSUB_PATTERNS = [
+        re.compile(r'\bunsub(?:cribe)?\b'),                    # unsub, unsubscribe
+        re.compile(r'\bremove\s+me\b'),                       # remove me
+        re.compile(r'\btake\s+me\s+off\b'),                  # take me off
+        re.compile(r'\bstop\s+(?:contacting|emailing|messaging|sending)\b'),  # stop *_ing
+        re.compile(r'\b(?:do\s+not|don\'t)\s+contact\b'),   # do not/don't contact
+        re.compile(r'\bopt(?:ing)?(?:[\s-]+me)?[\s-]+out\b'),  # opt out/opt me out/opt-out/opting out
+    ]
+    _PASS_PATTERNS = [
+        re.compile(r'\bnot\s+(?:for\s+)?me\b'),              # not for me, not me
+        re.compile(r'\b(?:i\'?ll|i\s+will)\s+pass\b'),       # i'll pass, i will pass
+        re.compile(r'\bpass(?:ing)?\s+on\s+(?:this|it|that|the|a)\b'),  # pass on this/passing on this
+        re.compile(r'\bnot\s+interested\b'),                  # not interested
+        re.compile(r'\bno\s+(?:thank\s+(?:you|u)|thanks)\b'),  # no thank you/no thanks
+        re.compile(r'\bdoesn\'?t\s+fit\b'),                   # doesn't fit
+        re.compile(r'\bnot\s+in\s+the\s+market\b'),          # not in the market
+        re.compile(r'\b(?:price|cost)\s+is\s+too\s+high\b'), # price/cost is too high
+        re.compile(r'\bnot\s+buying\b'),                       # not buying
+        re.compile(r'\bnot\s+(?:looking|searching)\b'),        # not looking for/not searching
+        re.compile(r'\bstop\s+reaching\s+out\b'),             # stop reaching out
+        re.compile(r'\balready\s+(?:bought|have|got)\b'),     # already bought/already have/already got
+    ]
 
-    if any(p in reply_lower for p in _UNSUB):
+    if any(p.search(reply_lower) for p in _UNSUB_PATTERNS):
         return {
-            "next_message": f"Got it — removing you from my list.\n\n{settings.operator_signature}",
+            "next_message": f"Got it - removing you from my list.\n\n{settings.operator_signature}",
             "new_stage": "passed", "contract_ready": False,
             "pass_detected": False, "unsubscribe_detected": True,
             "extracted_info": {}, "notes": "Unsubscribe via pre-check",
         }
-    if any(p in reply_lower for p in _PASS):
+    if any(p.search(reply_lower) for p in _PASS_PATTERNS):
         return {
             "next_message": None,
             "new_stage": "passed", "contract_ready": False,
@@ -85,24 +146,6 @@ async def process_conversation(
     for msg in thread_history[-6:]:
         role = "You" if msg["role"] == "assistant" else "Buyer"
         thread_str += f"{role}: {msg['content'][:500]}\n\n"
-
-    deal_context = (
-        f"Property: {deal.address}, {deal.city}, {deal.state}\n"
-        f"Type: {deal.property_type} | {deal.beds}bd/{deal.baths}ba | "
-        f"{deal.sqft or '?'} sqft | built {deal.year_built or 'unknown'}\n"
-        f"Asking: ${float(deal.asking_price):,.0f} | ARV: ${float(deal.arv):,.0f} | "
-        f"Spread: ${float(deal.spread or 0):,.0f}\n"
-        f"Floor price (NEVER reveal): ${float(deal.floor_price):,.0f}\n"
-        f"Condition: {deal.condition_description or 'not specified'}\n"
-        + (
-            f"Repair/rehab estimate: ${float(deal.repair_estimate):,.0f}\n"
-            if deal.repair_estimate
-            else "Repair/rehab estimate: not specified — say you can pull contractor numbers if asked\n"
-        )
-        + f"Buyer all-in: ${float(deal.asking_price) + float(deal.repair_estimate or 0):,.0f} (asking + rehab)\n"
-        f"Buyer profit after flip: ${float(deal.arv) - float(deal.asking_price) - float(deal.repair_estimate or 0):,.0f}\n"
-        f"This is an OFF-MARKET deal — sourced directly, not listed on MLS.\n"
-    )
 
     # Always show accumulated contract state — buyers drop pieces at any stage,
     # across any number of messages. The AI must know exactly what is still missing.
@@ -144,20 +187,77 @@ async def process_conversation(
     )
 
     system_prompt = (
-        f"You are {settings.operator_name}, real estate wholesaler.\n"
-        f"Deal: {deal.address}, {deal.city} {deal.state} | "
-        f"{deal.beds}bd/{deal.baths}ba | asking ${float(deal.asking_price):,.0f} | "
+        # ── OPERATOR IDENTITY ──
+        f"You are {settings.operator_name}. You are a solo real estate wholesaler (a woman).\n"
+        f"You are NOT a licensed real estate agent. You are NOT based in the US.\n"
+        f"You do NOT run a company or agency. You do NOT have employees.\n\n"
+        f"WHAT YOU DO:\n"
+        f"You source off-market deals from your US-based JV partners who handle the seller side.\n"
+        f"You then pitch these deals to cash buyers at a discount.\n"
+        f"You have the property under contract (via your JV partner) before pitching.\n"
+        f"You split the profit with your JV partners when a deal closes.\n"
+        f"You have been doing this for 3 years and are doing more deals than ever.\n\n"
+        f"YOUR JV PARTNERS:\n"
+        f"You have a small network of trusted US-local partners who deal directly with sellers.\n"
+        f"They handle the seller side, you handle the buyer side.\n"
+        f"You do not disclose partner names or details to buyers.\n\n"
+        f"MARKETS YOU OPERATE IN:\n"
+        f"You only work in US states where wholesaling does not legally require a real estate license.\n"
+        f"You do not operate in states with strict assignment restriction laws.\n\n"
+        # ── CURRENT DEAL ──
+        f"CURRENT DEAL:\n"
+        f"Property: {deal.address}, {deal.city} {deal.state} | "
+        f"{deal.beds}bd/{deal.baths}ba | {deal.sqft or '?'} sqft | built {deal.year_built or '?'} | "
+        f"asking ${float(deal.asking_price):,.0f} | "
         f"ARV ${float(deal.arv):,.0f} | "
         + (f"rehab ${float(deal.repair_estimate):,.0f} | " if deal.repair_estimate else "")
         + f"buyer profit ${float(deal.arv)-float(deal.asking_price)-float(deal.repair_estimate or 0):,.0f} | "
         f"floor ${float(deal.floor_price):,.0f} (NEVER reveal)\n"
         f"Buyer: {buyer.full_name}\n"
         f"Contract info — {_info_line}\n\n"
-        f"Rules: human tone, 2-4 sentences, never pushy, never reveal floor price, "
+        # ── HOW TO ANSWER IDENTITY QUESTIONS ──
+        f"HOW TO ANSWER IDENTITY QUESTIONS:\n"
+        f"- 'Who are you?' -> 'I'm Irtaqa, I source off-market investment deals for cash buyers.'\n"
+        f"- 'What company are you with?' -> 'I'm independent — I work with a small network of partners who find deals on the seller side.'\n"
+        f"- 'Are you a realtor or licensed agent?' -> 'No, I'm not a licensed agent. I'm a wholesaler — I connect buyers with off-market deals.'\n"
+        f"- 'Are you local?' -> 'I'm not local but my partners on the ground are — they handle the seller side and verify everything on-site.'\n"
+        f"- 'How long have you been doing this?' -> 'About three years. I've been doing more volume lately.'\n"
+        f"- 'Can I call you?' -> 'Email is best for me — I'm not always available by phone but I respond quickly.'\n"
+        f"- 'Do you have a website or portfolio?' -> 'I don't have a public portfolio — I work by referral and direct outreach.'\n"
+        f"- 'Can I see your portfolio?' -> 'I don't keep a formal portfolio. I work deal-by-deal — happy to walk you through this one and share whatever details you need.'\n"
+        f"- 'Who do you work with?' -> 'I work with a small group of US-based partners. We've been running this for a few years.'\n"
+        f"- 'Is this a wholesaler deal?' -> 'Yes, it's a wholesaler deal. I source off-market through my partners and bring it to cash buyers like you.'\n"
+        f"- 'Are you the owner?' -> 'I have the property under contract through my partner network — same end result for you as a buyer.'\n\n"
+        # ── CONVERSATION RULES ──
+        f"RULES:\n"
+        f"Professional, warm, direct. You are a businessperson who knows her deals and her buyers.\n"
+        f"Confident but never pushy. Concise, natural — no corporate language, no fluff.\n"
         f"counter=still interested (never pass), pass only for explicit rejection.\n"
         f"When buyer is ready to proceed: collect missing contract pieces ONE AT A TIME naturally — "
         f"ask only for the NEXT missing item, never re-ask what you already have.\n"
-        f"For factual questions answer with exact numbers above. Never echo buyer's words back.\n"
+        f"You have the deal data listed above. NEVER invent facts that are not listed there.\n"
+        f"For factual questions answer ONLY from the exact data above. If the answer is not in the data above,"
+        f" say 'Let me check on that' or 'I'll find out'. Never guess or make up a number or status.\n"
+        f"BAD (hallucination): claiming any specific status about flood zones, HOA fees, taxes,"
+        f" liens, foundation condition, inspections, schools, crime rates, rental estimates,"
+        f" basement, historical status, permits, or any other unverified property detail.\n"
+        f"GOOD (from data): 'The asking price is $195,000' / 'It has 4 bedrooms' / 'The square footage is 1,650' / 'It was built in 1994'.\n"
+        f"GOOD (uncertain): 'Let me check on that for you' / 'I'll pull those details and get back to you'.\n"
+        f"CRITICAL: If you do NOT have the data, say you will check — then STOP.\n"
+        f"  NEVER say 'I don't know' and then immediately guess a number anyway.\n"
+        f"  If you say 'let me check on that', the sentence must END there — no estimates.\n"
+        f"  Making up facts after saying you don't know is just as harmful as guessing directly.\n\n"
+        # ── WHAT TO NEVER SAY ──
+        f"WHAT TO NEVER SAY:\n"
+        f"- Never say you are a licensed real estate agent\n"
+        f"- Never say you are based in the US or in any specific US city\n"
+        f"- Never say you work for a company, brokerage, or agency\n"
+        f"- Never invent company names, license numbers, or years of experience beyond what is stated above\n"
+        f"- Never say you are an AI, bot, or automated system\n"
+        f"- Never reveal your JV partner names or details\n"
+        f"- Never reveal the floor price or your contract price with the seller\n"
+        f"- Never claim to have done a specific number of deals unless asked, and if asked say 'quite a few over the past three years'\n"
+        f"- Never echo buyer's words back\n\n"
         f"Sign off: {settings.operator_signature}"
     )
 
@@ -167,7 +267,11 @@ async def process_conversation(
         f"Stage options: engaging(curious/question/counter) | qualifying(warm, fishing) | "
         f"collecting_info(agreed, gathering contract details) | contract_ready(all 4 pieces present) | "
         f"passed(explicit rejection only)\n"
-        f"Extract any of: legal name, phone (any format), title company, agreed price — from THIS reply only.\n"
+        f"Extract NUMBERS (as raw numbers, no $ or commas) for: legal name, phone (any format), title company, agreed price.\n"
+        f"CRITICAL: agreed_price = ANY dollar amount the buyer mentions about the deal price.\n"
+        f"  Extract it REGARDLESS of stage — even if it's a counter or question.\n"
+        f"  Examples: 'I'll do it at $185,000' -> 185000, 'I'll pay $180k' -> 180000, 'What about $190k?' -> 190000\n"
+        f"  Return as a plain number: 185000 NOT '$185,000'. If no price mentioned, return null.\n"
         f"Return ONLY JSON: {{\"stage\":\"...\",\"pass\":false,\"unsub\":false,"
         f"\"reply\":\"...\",\"extracted_legal_name\":null,\"extracted_phone\":null,"
         f"\"extracted_title_company\":null,\"extracted_agreed_price\":null}}"
@@ -213,11 +317,30 @@ async def process_conversation(
         # State-completion logic: merge what the campaign already holds with what
         # this message just provided. contract_ready is a function of ACCUMULATED
         # state — not of any single message, and not of the AI's stage label alone.
+        ai_extracted_price = parsed.get("extracted_agreed_price")
+        # Regex fallback: if AI didn't extract a price but the reply clearly contains
+        # a dollar amount the buyer is offering, extract it here.
+        if ai_extracted_price is None:
+            known = {
+                float(deal.asking_price) if deal.asking_price else None,
+                float(deal.arv) if deal.arv else None,
+                float(deal.repair_estimate) if deal.repair_estimate else None,
+                float(deal.floor_price) if deal.floor_price else None,
+                float(deal.contract_price) if deal.contract_price else None,
+            }
+            known.discard(None)
+            fallback_price = _extract_price_fallback(reply_body, known)  # type: ignore[arg-type]
+            if fallback_price is not None:
+                logger.info(
+                    "Price extraction fallback: extracted $%.0f from reply '%s' (AI missed it)",
+                    fallback_price, reply_body[:60],
+                )
+                ai_extracted_price = fallback_price
         just_collected = {
             "legal_name": parsed.get("extracted_legal_name"),
             "phone": parsed.get("extracted_phone"),
             "title_company": parsed.get("extracted_title_company"),
-            "agreed_price": parsed.get("extracted_agreed_price"),
+            "agreed_price": ai_extracted_price,
         }
         will_have = {
             "legal_name": campaign.buyer_legal_name or just_collected["legal_name"],
@@ -357,7 +480,7 @@ async def process_conversation(
                 "legal_name": parsed.get("extracted_legal_name"),
                 "phone": parsed.get("extracted_phone"),
                 "title_company": parsed.get("extracted_title_company"),
-                "agreed_price": parsed.get("extracted_agreed_price"),
+                "agreed_price": ai_extracted_price,
             },
             "classification": parsed,
         }
