@@ -512,8 +512,108 @@ class TestOperatorContractAlertFlow:
         assert "resolution_notes" not in mock_entry.metadata_json
 
 
+# ===========================================================================
+# Edge case tests for contract alert resolve flow
+# ===========================================================================
 
-class TestSchedulerContractReadyAlert:
+
+class TestContractAlertEdgeCases:
+    """Parameterized edge case tests for the contract alert resolve flow.
+    Tests extreme note lengths, special characters, and missing metadata."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("notes,expect_key,expected_stored", [
+        ("", False, None),  # Empty string is falsy → not stored
+        ("A" * 1000, True, "A" * 1000),
+        ("Speci@l ch@racters! #$%^&*()", True, "Speci@l ch@racters! #$%^&*()"),
+        ("Multi\nLine\nNotes", True, "Multi\nLine\nNotes"),
+        ("Contract signed on 2024-01-15 by J. Smith (CEO)", True, "Contract signed on 2024-01-15 by J. Smith (CEO)"),
+    ])
+    async def test_resolve_with_various_notes(self, notes, expect_key, expected_stored):
+        """Resolve with various note formats should store them correctly."""
+        from app.routers.alerts import resolve_contract_alert
+        from app.schemas import ContractAlertResolveRequest
+
+        alert_id = uuid.uuid4()
+
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "contract_ready"
+        mock_entry.resolved = False
+        mock_entry.resolved_at = None
+        mock_entry.metadata_json = {
+            "alert_type": "contract_ready",
+            "buyer": {},
+            "deal": {},
+        }
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = ContractAlertResolveRequest(notes=notes)
+        result = await resolve_contract_alert(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+        if expect_key:
+            assert mock_entry.metadata_json["resolution_notes"] == expected_stored
+        else:
+            assert "resolution_notes" not in mock_entry.metadata_json
+        assert mock_entry.metadata_json["resolved_at"] is not None
+        mock_db.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_alert_metadata_is_none(self):
+        """Resolving an alert with metadata_json=None should not crash."""
+        from app.routers.alerts import resolve_contract_alert
+        from app.schemas import ContractAlertResolveRequest
+
+        alert_id = uuid.uuid4()
+
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "contract_ready"
+        mock_entry.resolved = False
+        mock_entry.resolved_at = None
+        mock_entry.metadata_json = None
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = ContractAlertResolveRequest(notes="Resolved")
+        result = await resolve_contract_alert(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+        assert mock_entry.resolved is True
+        # metadata_json should have been initialized to {}
+        # then updated with resolved_at and resolution_notes
+        assert mock_entry.metadata_json is not None
+        assert "resolution_notes" in mock_entry.metadata_json
+        assert "resolved_at" in mock_entry.metadata_json
+
+    @pytest.mark.asyncio
+    async def test_resolve_alert_metadata_is_none_has_resolved_at(self):
+        """When metadata_json is None, resolved_at should still be set."""
+        from app.routers.alerts import resolve_contract_alert
+        from app.schemas import ContractAlertResolveRequest
+
+        alert_id = uuid.uuid4()
+
+        mock_entry = MagicMock(spec=ActivityLog)
+        mock_entry.id = alert_id
+        mock_entry.action = "contract_ready"
+        mock_entry.resolved = False
+        mock_entry.resolved_at = None
+        mock_entry.metadata_json = None
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=mock_entry)
+
+        body = ContractAlertResolveRequest(notes="Completed")
+        result = await resolve_contract_alert(alert_id, body, db=mock_db)
+
+        assert result["resolved_at"] is not None
+        assert mock_entry.metadata_json["resolved_at"] is not None
+        assert mock_entry.metadata_json["resolution_notes"] == "Completed"
     """End-to-end tests for the scheduler's contract_ready alert creation path
     in reply_pipeline.py. Calls process_conversation (with mocked AI) to get
     contract_ready=True, then verifies the ActivityLog metadata the scheduler

@@ -1245,3 +1245,268 @@ class TestOperatorNegotiationFlow:
 
         assert exc.value.status_code == 400
         assert "missing campaign_id" in exc.value.detail.lower()
+
+
+# ===========================================================================
+# Edge case tests for operator approve/reject flow
+# ===========================================================================
+
+
+class TestOperatorNegotiationEdgeCases:
+    """Parameterized edge case tests for extreme prices, missing fields,
+    and boundary conditions in the operator approve/reject flow."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("final_price,expected_in_body", [
+        (10_000_000.0, "$10,000,000"),
+        (0.01, "$0"),  # :,.0f rounds to zero decimals
+        (0.0, "$0"),
+        (-1000.0, "$-1,000"),  # Format: $ precedes the sign
+        (172000.501, "$172,001"),  # :,.0f rounds up
+    ])
+    async def test_approve_extreme_prices(self, final_price, expected_in_body):
+        """Approving with extreme prices should work without errors."""
+        from app.routers.alerts import approve_negotiation, NegotiationApproveRequest
+
+        campaign_id = uuid.uuid4()
+        deal_id = uuid.uuid4()
+        buyer_id = uuid.uuid4()
+        alert_id = uuid.uuid4()
+
+        campaign = _make_campaign(campaign_id, deal_id, buyer_id)
+        deal = _make_deal(deal_id)
+        entry = _make_negotiation_alert(alert_id, campaign_id, deal_id, buyer_id)
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(side_effect=lambda model, pk: {
+            ActivityLog: entry,
+            Campaign: campaign,
+            Deal: deal,
+        }.get(model))
+
+        body = NegotiationApproveRequest(final_price=final_price)
+
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            result = await approve_negotiation(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+        assert result["action"] == "approved"
+        assert result["final_price"] == final_price
+
+        # Email should be sent with the price formatted (:,.0f = zero decimals)
+        send_mock.assert_called_once()
+        body_text = send_mock.call_args.kwargs.get("body", "")
+        assert expected_in_body in body_text, (
+            f"Expected '{expected_in_body}' in email body, got: {body_text[:200]}"
+        )
+
+        # Campaign should be updated
+        assert campaign.agreed_price == final_price
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("counter_offer,expected_action,expected_in_body", [
+        (10_000_000.0, "countered", "$10,000,000"),
+        (0.01, "countered", "$0"),  # :,.0f rounds to zero decimals
+        (0.0, "declined", None),      # 0.0 is falsy in Python → treated as no counter
+        (-1000.0, "countered", "$-1,000"),
+        (None, "declined", None),
+    ])
+    async def test_reject_extreme_counter_offers(self, counter_offer, expected_action, expected_in_body):
+        """Rejecting with extreme counter offers should work without errors."""
+        from app.routers.alerts import reject_negotiation, NegotiationRejectRequest
+
+        campaign_id = uuid.uuid4()
+        deal_id = uuid.uuid4()
+        buyer_id = uuid.uuid4()
+        alert_id = uuid.uuid4()
+
+        deal = _make_deal(deal_id)
+        entry = _make_negotiation_alert(alert_id, campaign_id, deal_id, buyer_id)
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(side_effect=lambda model, pk: {
+            ActivityLog: entry,
+            Deal: deal,
+        }.get(model))
+
+        body = NegotiationRejectRequest(counter_offer=counter_offer)
+
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            result = await reject_negotiation(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+        assert result["action"] == expected_action
+        assert result["counter_sent"] == counter_offer
+
+        if expected_in_body:
+            send_mock.assert_called_once()
+            body_text = send_mock.call_args.kwargs.get("body", "")
+            assert expected_in_body in body_text, (
+                f"Expected '{expected_in_body}' in email body, got: {body_text[:200]}"
+            )
+        else:
+            # Counter is falsy (None or 0.0) → decline email still sent
+            send_mock.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("metadata_overrides,expect_email", [
+        ({"buyer_email": ""}, False),
+        ({"buyer_email": "buyer@test.com", "deal_address": ""}, True),
+        ({"buyer_email": "nonexistent@example.com"}, True),
+    ])
+    async def test_approve_various_metadata_fields(self, metadata_overrides, expect_email):
+        """Approve should handle various metadata configurations gracefully."""
+        from app.routers.alerts import approve_negotiation, NegotiationApproveRequest
+
+        campaign_id = uuid.uuid4()
+        deal_id = uuid.uuid4()
+        buyer_id = uuid.uuid4()
+        alert_id = uuid.uuid4()
+
+        campaign = _make_campaign(campaign_id, deal_id, buyer_id)
+        deal = _make_deal(deal_id)
+
+        entry = MagicMock(spec=ActivityLog)
+        entry.id = alert_id
+        entry.action = "negotiation_escalation"
+        entry.resolved = False
+        entry.resolved_at = None
+        entry.created_at = datetime.now(timezone.utc)
+        entry.metadata_json = {
+            "buyer_id": str(buyer_id),
+            "deal_id": str(deal_id),
+            "campaign_id": str(campaign_id),
+            "counter_price": 150000.0,
+            "floor_price": 180000.0,
+            "gap": 30000.0,
+            "buyer_email": "buyer@test.com",
+            "deal_address": "123 Main St",
+            "buyer_name": "Test Buyer",
+            **metadata_overrides,
+        }
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(side_effect=lambda model, pk: {
+            ActivityLog: entry,
+            Campaign: campaign,
+            Deal: deal,
+        }.get(model))
+
+        body = NegotiationApproveRequest(final_price=165000.0)
+
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            result = await approve_negotiation(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+
+        if expect_email:
+            send_mock.assert_called_once()
+        else:
+            # Empty buyer_email should skip sending
+            send_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("metadata_overrides,expect_email", [
+        ({"buyer_email": ""}, False),
+        ({"buyer_email": "reject@test.com"}, True),
+    ])
+    async def test_reject_various_metadata_fields(self, metadata_overrides, expect_email):
+        """Reject should handle various metadata configurations gracefully."""
+        from app.routers.alerts import reject_negotiation, NegotiationRejectRequest
+
+        campaign_id = uuid.uuid4()
+        deal_id = uuid.uuid4()
+        buyer_id = uuid.uuid4()
+        alert_id = uuid.uuid4()
+
+        deal = _make_deal(deal_id)
+
+        entry = MagicMock(spec=ActivityLog)
+        entry.id = alert_id
+        entry.action = "negotiation_escalation"
+        entry.resolved = False
+        entry.resolved_at = None
+        entry.created_at = datetime.now(timezone.utc)
+        entry.metadata_json = {
+            "buyer_id": str(buyer_id),
+            "deal_id": str(deal_id),
+            "campaign_id": str(campaign_id),
+            "counter_price": 150000.0,
+            "floor_price": 180000.0,
+            "gap": 30000.0,
+            "buyer_email": "buyer@test.com",
+            "deal_address": "123 Main St",
+            "buyer_name": "Test Buyer",
+            **metadata_overrides,
+        }
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(side_effect=lambda model, pk: {
+            ActivityLog: entry,
+            Deal: deal,
+        }.get(model))
+
+        body = NegotiationRejectRequest(counter_offer=None)
+
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            result = await reject_negotiation(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+
+        if expect_email:
+            send_mock.assert_called_once()
+        else:
+            send_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_approve_metadata_is_none(self):
+        """Approve with metadata_json=None should not crash."""
+        from app.routers.alerts import approve_negotiation, NegotiationApproveRequest
+        from fastapi import HTTPException
+
+        alert_id = uuid.uuid4()
+
+        entry = MagicMock(spec=ActivityLog)
+        entry.id = alert_id
+        entry.action = "negotiation_escalation"
+        entry.resolved = False
+        entry.resolved_at = None
+        entry.metadata_json = None
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=entry)
+
+        body = NegotiationApproveRequest(final_price=165000.0)
+
+        # Should raise 400 because meta.get("campaign_id") will be None
+        with pytest.raises(HTTPException) as exc:
+            await approve_negotiation(alert_id, body, db=mock_db)
+
+        assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_reject_metadata_is_none(self):
+        """Reject with metadata_json=None should not crash."""
+        from app.routers.alerts import reject_negotiation, NegotiationRejectRequest
+
+        alert_id = uuid.uuid4()
+
+        entry = MagicMock(spec=ActivityLog)
+        entry.id = alert_id
+        entry.action = "negotiation_escalation"
+        entry.resolved = False
+        entry.resolved_at = None
+        entry.metadata_json = None
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=entry)
+
+        body = NegotiationRejectRequest(counter_offer=None)
+
+        # Should work without crashing (meta.get("buyer_email") returns None,
+        # but reject handles missing email gracefully)
+        with patch("app.routers.alerts.send_email", AsyncMock()) as send_mock:
+            result = await reject_negotiation(alert_id, body, db=mock_db)
+
+        assert result["resolved"] is True
+        send_mock.assert_not_called()  # No email since buyer_email is missing
