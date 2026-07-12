@@ -523,3 +523,351 @@ class TestRejectNegotiation:
         assert entry.resolved is True
         assert entry.resolved_at is not None
         assert entry.metadata_json["resolution_action"] in ("declined", "countered")
+
+
+# ===========================================================================
+# End-to-end negotiation escalation flow tests
+# ===========================================================================
+
+
+class TestNegotiationEscalationFlow:
+    """End-to-end style tests for below-floor counter escalation,
+    similar to the contract collection step-by-step tests."""
+
+    @pytest.mark.asyncio
+    async def test_below_floor_counter_from_interest(self):
+        """Buyer counters below floor from pitching stage → escalation created, no auto-reply."""
+        from app.services.conversation_engine import process_conversation
+
+        deal = _make_deal(floor_price=180000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="pitching")
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"engaging","pass":false,"unsub":false,'
+            '"reply":"I can do $150k","extracted_legal_name":null,'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":150000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="I can do $150,000",
+                reply_subject="Re: Great deal in Austin",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        # Escalation created
+        assert result["negotiation_escalation"] is not None, (
+            "Expected negotiation_escalation for below-floor counter"
+        )
+        esc = result["negotiation_escalation"]
+        assert esc["counter_price"] == 150000.0
+        assert esc["floor_price"] == 180000.0
+        assert esc["gap"] == 30000.0
+
+        # Stage forced to negotiating
+        assert result["new_stage"] == "negotiating", (
+            f"Expected stage='negotiating', got {result['new_stage']}"
+        )
+
+        # No auto-reply
+        assert result["next_message"] is None or result["next_message"] == "", (
+            "Expected no auto-reply for below-floor counter"
+        )
+
+        # Not a pass or unsubscribe
+        assert result["pass_detected"] is False
+        assert result["unsubscribe_detected"] is False
+
+        # Not contract_ready
+        assert result["contract_ready"] is False
+
+    @pytest.mark.asyncio
+    async def test_below_floor_during_collection_escalates(self):
+        """Mid-collection, buyer gives below-floor price → escalation overrides, not contract_ready."""
+        from app.services.conversation_engine import process_conversation
+
+        deal = _make_deal(floor_price=180000.0)
+        buyer = _make_buyer()
+        # Campaign is mid-collection with 3 of 4 pieces collected
+        campaign = _make_campaign(
+            stage="collecting_info",
+            deal_id=deal.id,
+            buyer_id=buyer.id,
+        )
+        campaign.buyer_legal_name = "Ahmad Raza Khan"
+        campaign.buyer_phone = "923001234567"
+        campaign.buyer_title_company = "First American Title"
+        campaign.agreed_price = None
+
+        # AI extracts agreed_price below floor
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"collecting_info","pass":false,"unsub":false,'
+            '"reply":"$150k sounds good","extracted_legal_name":null,'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":150000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="$150k sounds good",
+                reply_subject="Re: Great deal in Austin",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        # All 4 pieces would be present (3 from campaign + 1 from AI),
+        # but below-floor escalation should override contract_ready
+        assert result["negotiation_escalation"] is not None, (
+            "Expected escalation even during collection when price is below floor"
+        )
+        esc = result["negotiation_escalation"]
+        assert esc["counter_price"] == 150000.0
+        assert esc["floor_price"] == 180000.0
+
+        # Stage should be negotiating (overridden from what would be contract_ready)
+        assert result["new_stage"] == "negotiating", (
+            f"Expected stage='negotiating', got {result['new_stage']}"
+        )
+
+        # Not contract_ready — escalation takes priority
+        assert result["contract_ready"] is False, (
+            "Below-floor price should NOT result in contract_ready"
+        )
+
+        # No auto-reply
+        assert result["next_message"] is None or result["next_message"] == ""
+
+    @pytest.mark.asyncio
+    async def test_below_floor_escalation_metadata(self):
+        """Verify all fields in the escalation dict are populated correctly."""
+        from app.services.conversation_engine import process_conversation
+
+        deal = _make_deal(floor_price=175000.0, asking_price=200000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="pitching", deal_id=deal.id, buyer_id=buyer.id)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"engaging","pass":false,"unsub":false,'
+            '"reply":"$160k","extracted_legal_name":null,'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":160000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="$160k",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        esc = result["negotiation_escalation"]
+        assert esc is not None
+
+        # Price fields
+        assert esc["counter_price"] == 160000.0
+        assert esc["floor_price"] == 175000.0
+        assert esc["gap"] == 15000.0
+
+        # Buyer info
+        assert esc["buyer_name"] == buyer.full_name
+        assert esc["buyer_email"] == buyer.email
+        assert esc["buyer_id"] == str(buyer.id)
+
+        # Deal info
+        assert esc["deal_id"] == str(deal.id)
+        assert esc["deal_address"] == deal.address
+
+        # Campaign info
+        assert esc["campaign_id"] == str(campaign.id)
+
+    @pytest.mark.asyncio
+    async def test_price_at_exactly_floor_no_escalation(self):
+        """Price exactly at floor should NOT create an escalation."""
+        from app.services.conversation_engine import process_conversation
+
+        deal = _make_deal(floor_price=180000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="engaging")
+
+        # Agreed price exactly at floor (use distinct reply to avoid anti-echo guard)
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"collecting_info","pass":false,"unsub":false,'
+            '"reply":"Perfect — let me grab your details. What\'s your legal name?",'
+            '"extracted_legal_name":"Ahmad Raza Khan",'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":180000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="$180k works for me",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        # No escalation — price equals floor (not below)
+        assert result["negotiation_escalation"] is None, (
+            "Price at floor should not trigger escalation"
+        )
+        # Should proceed to collecting_info since legal name was extracted
+        assert result["new_stage"] == "collecting_info"
+        # Should have an auto-reply (not suppressed by anti-echo guard)
+        assert result["next_message"] is not None
+
+    @pytest.mark.asyncio
+    async def test_price_slightly_above_floor_no_escalation(self):
+        """Price just above floor should proceed normally without escalation."""
+        from app.services.conversation_engine import process_conversation
+
+        deal = _make_deal(floor_price=180000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="engaging")
+
+        # Agreed price slightly above floor
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"collecting_info","pass":false,"unsub":false,'
+            '"reply":"$195k and we have a deal","extracted_legal_name":"Ahmad Raza Khan",'
+            '"extracted_phone":"923001234567","extracted_title_company":null,'
+            '"extracted_agreed_price":195000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="$195k and we have a deal",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        # No escalation — price is above floor
+        assert result["negotiation_escalation"] is None
+        # Should move to collecting_info with legal name and phone
+        assert result["new_stage"] == "collecting_info"
+        # Extracted info should be present
+        assert result["extracted_info"]["legal_name"] == "Ahmad Raza Khan"
+        assert result["extracted_info"]["phone"] == "923001234567"
+
+    @pytest.mark.asyncio
+    async def test_below_floor_with_floor_at_zero(self):
+        """When floor_price is 0 or None, no escalation should occur."""
+        from app.services.conversation_engine import process_conversation
+
+        deal = _make_deal(floor_price=0.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(stage="engaging")
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"collecting_info","pass":false,"unsub":false,'
+            '"reply":"$150k sounds good","extracted_legal_name":"Ahmad Raza Khan",'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":150000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="$150k sounds good",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        # No escalation — floor is 0.0, 150000 > 0
+        assert result["negotiation_escalation"] is None
+        assert result["new_stage"] == "collecting_info"
+
+    @pytest.mark.asyncio
+    async def test_above_floor_completes_contract_collection(self):
+        """Above-floor price when all 4 pieces are present → contract_ready, not escalation."""
+        from app.services.conversation_engine import process_conversation
+
+        deal = _make_deal(floor_price=170000.0)
+        buyer = _make_buyer()
+        campaign = _make_campaign(
+            stage="collecting_info",
+            deal_id=deal.id,
+            buyer_id=buyer.id,
+        )
+        campaign.buyer_legal_name = "Ahmad Raza Khan"
+        campaign.buyer_phone = "923001234567"
+        campaign.buyer_title_company = "First American Title"
+        campaign.agreed_price = None
+
+        # AI extracts agreed_price above floor → all 4 collected, no escalation
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"stage":"collecting_info","pass":false,"unsub":false,'
+            '"reply":"$180k works","extracted_legal_name":null,'
+            '"extracted_phone":null,"extracted_title_company":null,'
+            '"extracted_agreed_price":180000}'
+        )
+
+        with patch(
+            "app.services.conversation_engine.groq_chat_completion",
+            AsyncMock(return_value=mock_response),
+        ):
+            result = await process_conversation(
+                reply_body="$180k works",
+                reply_subject="Re: Property",
+                buyer=buyer,
+                deal=deal,
+                campaign=campaign,
+                thread_history=[],
+            )
+
+        # No escalation — above floor
+        assert result["negotiation_escalation"] is None
+
+        # contract_ready fires because all 4 pieces are present
+        assert result["contract_ready"] is True, (
+            f"Expected contract_ready=True, got {result['contract_ready']}"
+        )
+        assert result["new_stage"] == "contract_ready"
+        assert result["extracted_info"]["agreed_price"] == 180000
