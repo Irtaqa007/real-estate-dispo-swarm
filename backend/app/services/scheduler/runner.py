@@ -1,7 +1,7 @@
 """Background task scheduler orchestrator for automated 24/7 operations.
 
 Maintains two independent intervals:
-- Reply interval (30s default): time-sensitive tasks (reply processing, ghost detection, campaign sends)
+-    Reply interval (5 min default): time-sensitive tasks (reply processing, ghost detection, campaign sends)
 - Hourly interval (60 min): daily/maintenance tasks (auto-match, insights, aging, etc.)
 
 The loop ticks every 15 seconds and dispatches tasks based on elapsed time
@@ -50,7 +50,7 @@ from app.services.dead_letter_queue import retry_failed_campaign
 logger = logging.getLogger(__name__)
 
 # Scheduler intervals
-REPLY_INTERVAL_SECONDS = 30  # 30s for testing (change to 5*60 before go-live)
+REPLY_INTERVAL_SECONDS = 5 * 60  # 5 minutes — production value
 DAILY_INTERVAL_SECONDS = 60 * 60      # 1 hour: daily/maintenance tasks
 TICK_INTERVAL_SECONDS = 15            # Outer loop sleep (15s tick — enables 30s reply intervals)
 
@@ -121,7 +121,7 @@ async def _scheduler_loop() -> None:
                 logger.warning("Scheduler heartbeat save failed: %s", e)
 
             # ====================================================================
-            # REPLY INTERVAL — runs every 30 seconds (time-sensitive tasks)
+            # REPLY INTERVAL — runs every 5 minutes (time-sensitive tasks)
             # ====================================================================
             if now - _last_reply_run >= REPLY_INTERVAL_SECONDS:
                 # --- Task R1: Process scheduled campaigns ---
